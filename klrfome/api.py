@@ -103,7 +103,7 @@ class KLRfome:
         Returns:
             TrainingData object ready for fitting
         """
-        from ..io.vector import extract_at_points, generate_background_points
+        from klrfome.io.vector import extract_at_points, generate_background_points
         
         if isinstance(raster_stack, list):
             raster_stack = RasterStack.from_files(raster_stack)
@@ -273,12 +273,12 @@ class KLRfome:
         Returns:
             Dictionary with metrics per fold and aggregated statistics
         """
-        from ..utils.validation import cross_validate
+        from klrfome.utils.validation import cross_validate
         return cross_validate(self, training_data, n_folds, stratified, self.seed)
     
     def _generate_background_points(self, *args, **kwargs):
         """Generate random background sample locations."""
         # Implementation is now in io.vector.generate_background_points
-        from ..io.vector import generate_background_points
+        from klrfome.io.vector import generate_background_points
         return generate_background_points(*args, **kwargs)
 

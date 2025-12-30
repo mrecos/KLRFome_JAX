@@ -326,7 +326,7 @@ class RasterStack:
         Returns:
             List of SampleCollection objects
         """
-        from ..io.vector import extract_at_points
+        from klrfome.io.vector import extract_at_points
         return extract_at_points(
             self, points, buffer_radius, n_samples, random_seed
         )

@@ -260,11 +260,18 @@ def cross_validate(
     
     for fold_idx in range(n_folds):
         # Split into train and test
-        test_indices = folds[fold_idx]
-        train_indices = [i for i in range(n) if i not in test_indices]
-        
-        train_collections = [training_data.collections[i] for i in train_indices]
-        test_collections = [training_data.collections[i] for i in test_indices]
+        if stratified:
+            test_collections = folds[fold_idx]
+            train_collections = []
+            for i, coll in enumerate(training_data.collections):
+                if coll not in test_collections:
+                    train_collections.append(coll)
+        else:
+            test_indices = folds[fold_idx]
+            train_indices = [i for i in range(n) if i not in test_indices]
+            
+            train_collections = [training_data.collections[i] for i in train_indices]
+            test_collections = [training_data.collections[i] for i in test_indices]
         
         train_data = TrainingData(
             collections=train_collections,
@@ -275,18 +282,85 @@ def cross_validate(
         # Fit model
         model.fit(train_data)
         
-        # Predict on test set (simplified - would need to build test kernel)
-        # For now, return basic structure
+        # Build test kernel matrix: K_test shape (n_test, n_train)
+        # Compute similarity between each test collection and each training collection
+        distribution_kernel = model._distribution_kernel
+        n_test = len(test_collections)
+        n_train = len(train_collections)
+        
+        K_test = jnp.zeros((n_test, n_train))
+        
+        for i, test_coll in enumerate(test_collections):
+            for j, train_coll in enumerate(train_collections):
+                # Compute similarity between test and training collections
+                similarity = distribution_kernel(test_coll.samples, train_coll.samples)
+                K_test = K_test.at[i, j].set(similarity)
+        
+        # Get fitted alpha from model
+        alpha = model._fit_result.alpha
+        
+        # Predict on test set
+        klr = model._klr
+        test_probs = klr.predict_proba(K_test, alpha)
+        test_labels = jnp.array([coll.label for coll in test_collections])
+        
+        # Convert to numpy for metrics computation
+        test_probs_np = np.array(test_probs)
+        test_labels_np = np.array(test_labels)
+        
+        # Compute confusion matrix at threshold 0.5
+        cm_df = CM_quads(test_probs_np, test_labels_np, threshold=0.5)
+        if len(cm_df) > 0:
+            TP = int(cm_df.iloc[0]['TP'])
+            FP = int(cm_df.iloc[0]['FP'])
+            TN = int(cm_df.iloc[0]['TN'])
+            FN = int(cm_df.iloc[0]['FN'])
+        else:
+            TP = FP = TN = FN = 0
+        
+        # Compute metrics
+        fold_metrics = metrics(TP, TN, FP, FN)
+        
+        # Compute AUC
+        try:
+            auc = compute_roc_auc(test_probs_np, test_labels_np)
+        except Exception:
+            auc = 0.5
+        
+        fold_metrics['AUC'] = auc
+        
+        # Store fold results
         fold_results.append({
             'fold': fold_idx + 1,
             'n_train': len(train_collections),
             'n_test': len(test_collections),
+            'TP': TP,
+            'FP': FP,
+            'TN': TN,
+            'FN': FN,
+            'metrics': fold_metrics,
         })
+    
+    # Compute aggregated statistics
+    metric_names = list(fold_results[0]['metrics'].keys())
+    aggregated = {}
+    
+    for metric_name in metric_names:
+        values = [r['metrics'][metric_name] for r in fold_results]
+        aggregated[f'{metric_name}_mean'] = float(np.mean(values))
+        aggregated[f'{metric_name}_std'] = float(np.std(values))
+    
+    # Find best fold (by AUC)
+    best_fold_idx = max(range(len(fold_results)), 
+                        key=lambda i: fold_results[i]['metrics'].get('AUC', 0.5))
+    best_fold = fold_results[best_fold_idx]['fold']
     
     return {
         'folds': fold_results,
         'n_folds': n_folds,
-        'mean_train_size': np.mean([r['n_train'] for r in fold_results]),
-        'mean_test_size': np.mean([r['n_test'] for r in fold_results]),
+        'mean_train_size': float(np.mean([r['n_train'] for r in fold_results])),
+        'mean_test_size': float(np.mean([r['n_test'] for r in fold_results])),
+        'aggregated_metrics': aggregated,
+        'best_fold': best_fold,
     }
 

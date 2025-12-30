@@ -69,7 +69,8 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --cov=klrfome --cov-report=html --cov-report=term"
+# Use --no-cov by default to avoid issues, can be overridden with --cov
+addopts = "-v"
 
 [tool.black]
 line-length = 100

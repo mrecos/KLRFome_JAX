@@ -119,8 +119,28 @@ def metrics(TP: int, TN: int, FP: int, FN: int) -> Dict[str, float]:
         p = np.clip(p, 1e-10, 1 - 1e-10)
         return np.log(p / (1 - p))
     
-    # Compute all metrics
-    result = {
+    # Helper function to safely divide
+    def safe_divide(numerator, denominator, default=0.0):
+        """Safely divide, returning default if denominator is zero."""
+        try:
+            # Check for zero or very close to zero
+            if denominator == 0 or (isinstance(denominator, (int, float)) and abs(denominator) < 1e-10):
+                return default
+            # Also check if it's a numpy array/scalar that's close to zero
+            if hasattr(denominator, '__array__'):
+                if np.abs(denominator) < 1e-10:
+                    return default
+            result = numerator / denominator
+            # Check for inf or nan
+            if np.isinf(result) or np.isnan(result):
+                return default
+            return result
+        except (ZeroDivisionError, TypeError, ValueError):
+            return default
+    
+    # Compute all metrics with safe division
+    try:
+        result = {
         'Sensitivity': Sensitivity,
         'Specificity': Specificity,
         'Prevalence': (TP + FN) / n,
@@ -142,15 +162,27 @@ def metrics(TP: int, TN: int, FP: int, FN: int) -> Dict[str, float]:
         'FOR': FN / (FN + TN) if (FN + TN) > 0 else 0.0,
         'FDR': FP / (TP + FP) if (TP + FP) > 0 else 0.0,
         'Power': 1 - (1 - Sensitivity),
-        'LRP': Sensitivity / (1 - Specificity) if Specificity < 1 else float('inf'),
-        'log_LRP': np.log10(Sensitivity / (1 - Specificity)) if Specificity < 1 else float('inf'),
-        'LRN': (1 - Sensitivity) / Specificity if Specificity > 0 else float('inf'),
+        'LRP': safe_divide(Sensitivity, (1 - Specificity), default=float('inf')) if Specificity < 1 else float('inf'),
+        'log_LRP': np.log10(safe_divide(Sensitivity, (1 - Specificity), default=float('inf'))) if Specificity < 1 and not np.isinf(safe_divide(Sensitivity, (1 - Specificity), default=float('inf'))) else float('inf'),
+        'LRN': safe_divide((1 - Sensitivity), Specificity, default=float('inf')) if Specificity > 0 else float('inf'),
         'PPV': Precision,
         'NPV': TN / (FN + TN) if (FN + TN) > 0 else 0.0,
         'KG': 1 - ((1 - Specificity) / Sensitivity) if Sensitivity > 0 else 0.0,
         'KG2': 1 - (((TP + FP) / n) / Sensitivity) if Sensitivity > 0 else 0.0,
-        'DOR': (Sensitivity / (1 - Specificity)) / ((1 - Sensitivity) / Specificity) if Specificity < 1 and Specificity > 0 else float('inf'),
-        'log_DOR': np.log10((Sensitivity / (1 - Specificity)) / ((1 - Sensitivity) / Specificity)) if Specificity < 1 and Specificity > 0 else float('inf'),
+        'DOR': safe_divide(
+            safe_divide(Sensitivity, (1 - Specificity), default=float('inf')),
+            safe_divide((1 - Sensitivity), Specificity, default=float('inf')),
+            default=float('inf')
+        ) if Specificity < 1 and Specificity > 0 else float('inf'),
+        'log_DOR': np.log10(safe_divide(
+            safe_divide(Sensitivity, (1 - Specificity), default=float('inf')),
+            safe_divide((1 - Sensitivity), Specificity, default=float('inf')),
+            default=float('inf')
+        )) if Specificity < 1 and Specificity > 0 and not np.isinf(safe_divide(
+            safe_divide(Sensitivity, (1 - Specificity), default=float('inf')),
+            safe_divide((1 - Sensitivity), Specificity, default=float('inf')),
+            default=float('inf')
+        )) else float('inf'),
         'D': logit(Sensitivity) - logit(1 - Specificity),
         'S': logit(Sensitivity) + logit(1 - Specificity),
         'Kappa': cohens_kappa(TP, TN, FP, FN),
@@ -158,21 +190,39 @@ def metrics(TP: int, TN: int, FP: int, FN: int) -> Dict[str, float]:
         'MCC': (TP * TN - FP * FN) / np.sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN)) if (TP + FP) * (TP + FN) * (TN + FP) * (TN + FN) > 0 else 0.0,
         'Informedness': Sensitivity + Specificity - 1,  # TSS, Youden's J
         'Markedness': (TP / (TP + FP) if (TP + FP) > 0 else 0.0) + (TN / (FN + TN) if (FN + TN) > 0 else 0.0) - 1,
-        'AFK': np.sqrt(Sensitivity * ((Sensitivity - (1 - Specificity)) / ((TN + FP) / n))) if Sensitivity > 0 and (TN + FP) > 0 else 0.0,
-        'Indicative': Sensitivity / (1 - Specificity) if Specificity < 1 else float('inf'),
-        'Indicative2': Sensitivity / ((TP + FP) / n) if (TP + FP) > 0 else float('inf'),
-        'Indicative_norm': (Sensitivity / (1 - Specificity)) / ((TN + FP) / n) if Specificity < 1 and (TN + FP) > 0 else float('inf'),
-        'Indicative_norm2': (Sensitivity / ((TP + FP) / n)) / ((TN + FP) / n) if (TP + FP) > 0 and (TN + FP) > 0 else float('inf'),
+        'AFK': np.sqrt(Sensitivity * safe_divide((Sensitivity - (1 - Specificity)), ((TN + FP) / n), default=0.0)) if Sensitivity > 0 and (TN + FP) > 0 and n > 0 else 0.0,
+        'Indicative': safe_divide(Sensitivity, (1 - Specificity), default=float('inf')) if Specificity < 1 else float('inf'),
+        'Indicative2': safe_divide(Sensitivity, ((TP + FP) / n), default=float('inf')) if (TP + FP) > 0 and n > 0 else float('inf'),
+        'Indicative_norm': safe_divide(
+            safe_divide(Sensitivity, (1 - Specificity), default=float('inf')),
+            ((TN + FP) / n),
+            default=float('inf')
+        ) if Specificity < 1 and (TN + FP) > 0 and n > 0 else float('inf'),
+        'Indicative_norm2': safe_divide(
+            safe_divide(Sensitivity, ((TP + FP) / n), default=float('inf')),
+            ((TN + FP) / n),
+            default=float('inf')
+        ) if (TP + FP) > 0 and (TN + FP) > 0 and n > 0 else float('inf'),
         'Brier': float(np.mean((obs - pred) ** 2)),
-        'X1': (TP / (TP + FP) if (TP + FP) > 0 else 0.0) / ((TP + FN) / n) if (TP + FN) > 0 else 0.0,
-        'X2': (FN / (FN + TN) if (FN + TN) > 0 else 0.0) / ((TP + FN) / n) if (TP + FN) > 0 else 0.0,
-        'X3': (FP / (TP + FP) if (TP + FP) > 0 else 0.0) / ((TN + FP) / n) if (TN + FP) > 0 else 0.0,
-        'X4': (TN / (FN + TN) if (FN + TN) > 0 else 0.0) / ((TN + FP) / n) if (TN + FP) > 0 else 0.0,
-        'PPG': (TP / (TP + FP) if (TP + FP) > 0 else 0.0) / ((TP + FN) / n) if (TP + FN) > 0 else 0.0,
-        'NPG': (FN / (FN + TN) if (FN + TN) > 0 else 0.0) / ((TP + FN) / n) if (TP + FN) > 0 else 0.0,
+        'X1': safe_divide(safe_divide(TP, (TP + FP), default=0.0), ((TP + FN) / n), default=0.0) if (TP + FP) > 0 and (TP + FN) > 0 and n > 0 else 0.0,
+        'X2': safe_divide(safe_divide(FN, (FN + TN), default=0.0), ((TP + FN) / n), default=0.0) if (FN + TN) > 0 and (TP + FN) > 0 and n > 0 else 0.0,
+        'X3': safe_divide(safe_divide(FP, (TP + FP), default=0.0), ((TN + FP) / n), default=0.0) if (TP + FP) > 0 and (TN + FP) > 0 and n > 0 else 0.0,
+        'X4': safe_divide(safe_divide(TN, (FN + TN), default=0.0), ((TN + FP) / n), default=0.0) if (FN + TN) > 0 and (TN + FP) > 0 and n > 0 else 0.0,
+        'PPG': safe_divide(safe_divide(TP, (TP + FP), default=0.0), ((TP + FN) / n), default=0.0) if (TP + FP) > 0 and (TP + FN) > 0 and n > 0 else 0.0,
+        'NPG': safe_divide(safe_divide(FN, (FN + TN), default=0.0), ((TP + FN) / n), default=0.0) if (FN + TN) > 0 and (TP + FN) > 0 and n > 0 else 0.0,
         'Balance': ((1 - ((1 - Specificity) / Sensitivity) if Sensitivity > 0 else 0.0) + (1 - ((1 - Sensitivity) / Specificity) if Specificity > 0 else 0.0)) / 2,
-        'Balance2': ((1 - (((TP + FP) / n) / Sensitivity) if Sensitivity > 0 else 0.0) + (1 - ((1 - Sensitivity) / ((FN + TN) / n)) if (FN + TN) > 0 else 0.0)) / 2,
-    }
+        'Balance2': ((1 - safe_divide(((TP + FP) / n), Sensitivity, default=0.0) if Sensitivity > 0 and n > 0 else 0.0) + (1 - safe_divide((1 - Sensitivity), ((FN + TN) / n), default=0.0) if (FN + TN) > 0 and n > 0 else 0.0)) / 2,
+        }
+    except (ZeroDivisionError, ValueError, TypeError) as e:
+        # If any calculation fails, return empty dict or minimal metrics
+        # This should rarely happen with all the guards, but just in case
+        result = {
+            'Sensitivity': Sensitivity,
+            'Specificity': Specificity,
+            'Precision': Precision,
+            'Recall': Recall,
+            'Accuracy': (TP + TN) / n if n > 0 else 0.0,
+        }
     
     # Handle inf and nan values
     for key, value in result.items():

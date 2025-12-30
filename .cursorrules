@@ -1,0 +1,139 @@
+# KLRfome Python/JAX Implementation - Cursor Rules
+
+## Project Overview
+
+This is the Python/JAX implementation of **KLRfome** (Kernel Logistic Regression on Focal Mean Embeddings), refactored from the original R package. KLRfome solves a Distribution Regression problem for geographic/spatial prediction.
+
+**Repository**: https://github.com/mrecos/KLRFome_JAX
+**Original R Package**: https://github.com/mrecos/klrfome
+**Original Paper**: Harris, M.D. (2019). KLRfome - Kernel Logistic Regression on Focal Mean Embeddings. Journal of Open Source Software, 4(35), 722.
+
+## Core Concept
+
+KLRfome predicts binary outcomes (e.g., site present/absent) across landscapes by:
+1. Representing each site as a **distribution** of environmental feature vectors (not a single point)
+2. Computing similarity between distributions using **mean embeddings in RKHS**
+3. Fitting **Kernel Logistic Regression** on the similarity matrix
+4. Predicting using **focal windows** that compute similarity between landscape neighborhoods and training data
+
+## Current Implementation Status
+
+### ✅ Completed (Phase 1)
+- **Data Structures**: `SampleCollection`, `TrainingData`, `RasterStack`
+- **Kernels**: 
+  - Exact RBF kernel (`RBFKernel`)
+  - Random Fourier Features approximation (`RandomFourierFeatures`)
+  - Mean Embedding Kernel (`MeanEmbeddingKernel`)
+- **KLR Model**: `KernelLogisticRegression` with IRLS algorithm
+- **Focal Prediction**: `FocalPredictor` with JIT-compiled batch processing
+- **High-Level API**: `KLRfome` class for end-to-end workflow
+- **Testing**: 23 tests passing, 44% code coverage (core modules 80-90%)
+
+### 🚧 In Progress / Next Steps
+- **Phase 2**: Performance optimizations (multi-device parallel prediction)
+- **Phase 3**: Usability features (I/O integration, visualization, cross-validation)
+- **Phase 4**: Extensions (additional kernels, multi-scale windows, model serialization)
+
+## Technical Architecture
+
+### Key Technologies
+- **JAX**: For GPU acceleration, automatic differentiation, and JIT compilation
+- **JAX Idioms**: Use `@jit`, `vmap`, and functional style throughout
+- **Type Hints**: Use `jaxtyping` for array shape annotations
+- **Geospatial**: `rasterio` for rasters, `geopandas` for vector data
+
+### Code Style
+- Follow PEP 8 with 100 character line length
+- Use type hints with `jaxtyping` for arrays
+- Prefer functional style compatible with JAX
+- Avoid Python loops where vectorization is possible
+- Use `jax.jit` for hot paths, `jax.vmap` for batch operations
+
+### Important Design Decisions
+1. **JIT Compatibility**: All JIT-compiled functions must use JAX arrays, not Python objects
+2. **Static Arguments**: Use `static_argnames` for JIT, not `static_argnums` with `self`
+3. **Memory Efficiency**: RFF approximation avoids large kernel matrices
+4. **Numerical Stability**: IRLS uses ridge regularization, convergence checks
+
+## File Structure
+
+```
+klrfome/
+├── __init__.py          # Package exports
+├── api.py               # High-level KLRfome class
+├── data/                # Data structures (SampleCollection, TrainingData, RasterStack)
+├── kernels/             # Kernel implementations (RBF, RFF, MeanEmbedding)
+├── models/              # KLR model with IRLS
+├── prediction/          # Focal window prediction
+├── io/                  # Raster/vector I/O (rasterio, geopandas)
+├── utils/               # GPU detection, scaling, validation, serialization
+└── visualization/       # Plotting utilities
+
+tests/                   # Pytest test suite
+benchmarks/              # Performance benchmarks
+notebooks/               # Tutorial notebooks (planned)
+AI_Context/              # Technical specification document
+```
+
+## Testing Requirements
+
+- **Unit Tests**: All core functionality (kernels, KLR, prediction, data structures)
+- **Integration Tests**: End-to-end workflows
+- **Property-Based Testing**: Use Hypothesis for numerical properties
+- **Coverage Target**: 80%+ for core modules (currently 44% overall, 80-90% for core)
+
+Run tests: `pytest tests/ --cov=klrfome`
+
+## Common Patterns
+
+### Kernel Implementation
+```python
+from jax import jit
+import jax.numpy as jnp
+
+@jit
+def __call__(self, X, Y):
+    # Kernel computation
+    return jnp.array(...)
+```
+
+### JIT-Compatible Batch Processing
+```python
+@staticmethod
+@partial(jit, static_argnames=['window_size'])
+def _predict_batch(padded_data, coords, pad, window_size, ...):
+    # Extract needed values, don't use self
+    def predict_single(coord):
+        # Process single item
+    return vmap(predict_single)(coords)
+```
+
+## Known Issues / Limitations
+
+1. **Exact Kernels in JIT**: Exact kernel path in `FocalPredictor._predict_batch` returns zeros (use RFF for JIT)
+2. **I/O Modules**: Placeholder implementations, need full rasterio/geopandas integration
+3. **Cross-Validation**: Placeholder, needs full k-fold implementation
+4. **Model Serialization**: Placeholder, needs pickle/JAX serialization
+
+## Development Priorities
+
+1. **Complete I/O Integration**: Full rasterio/geopandas support for real data workflows
+2. **Tutorial Notebooks**: Create `01_quickstart.ipynb` and other tutorials
+3. **Cross-Validation**: Implement k-fold CV with stratification
+4. **Documentation**: API docs, user guide, theory guide
+5. **Performance**: Multi-device parallel prediction, benchmarking
+
+## References
+
+- Full technical specification: `AI_Context/klrfome_python_refactor_spec.md`
+- Original R package documentation and paper for algorithm details
+- JAX documentation for JIT, vmap, and best practices
+
+## Notes for AI Assistant
+
+- Prioritize correctness over cleverness for numerical algorithms
+- Use established formulations for IRLS and kernel computations
+- Test that kernels satisfy mathematical properties (symmetry, PSD, etc.)
+- Be mindful of memory for large kernel matrices (prefer RFF)
+- When in doubt, refer to the technical specification document
+

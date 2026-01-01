@@ -95,13 +95,19 @@ pip install --upgrade "jax[cuda12]"
 
 ## Quick Start
 
+Example data is included in `example_data/` so you can run this immediately after installation:
+
 ```python
 from klrfome import KLRfome, RasterStack
 import geopandas as gpd
 
-# Load environmental rasters and known site locations
-raster_stack = RasterStack.from_files(['var1.tif', 'var2.tif', 'var3.tif'])
-sites = gpd.read_file('sites.shp')
+# Load the included example data (200x200 rasters, 25 sites)
+raster_stack = RasterStack.from_files([
+    'example_data/var1.tif',
+    'example_data/var2.tif', 
+    'example_data/var3.tif'
+])
+sites = gpd.read_file('example_data/sites.geojson')
 
 # Initialize model with hyperparameters
 model = KLRfome(
@@ -124,9 +130,8 @@ model.fit(training_data)
 
 # Predict probability surface across the landscape
 predictions = model.predict(raster_stack)
-
-# Save predictions as GeoTIFF
-model.save_predictions(predictions, 'probability_surface.tif')
+print(f"Predictions shape: {predictions.shape}")
+print(f"Probability range: [{predictions.min():.3f}, {predictions.max():.3f}]")
 ```
 
 ---
@@ -155,9 +160,13 @@ from klrfome.data.formats import SampleCollection, TrainingData
 import geopandas as gpd
 import numpy as np
 
-# Load data
-raster_stack = RasterStack.from_files(['elevation.tif', 'slope.tif', 'aspect.tif'])
-sites = gpd.read_file('known_sites.shp')
+# Load example data (or substitute your own files)
+raster_stack = RasterStack.from_files([
+    'example_data/var1.tif',
+    'example_data/var2.tif',
+    'example_data/var3.tif'
+])
+sites = gpd.read_file('example_data/sites.geojson')
 
 # Initialize model
 model = KLRfome(sigma=0.5, lambda_reg=0.1, window_size=5)

@@ -1,0 +1,18 @@
+{
+  "description": "Example dataset for KLRfome quickstart",
+  "seed": 42,
+  "cols": 200,
+  "rows": 200,
+  "n_sites": 25,
+  "autocorr_range": 20.0,
+  "raster_files": ["var1.tif", "var2.tif", "var3.tif"],
+  "sites_file": "sites.geojson",
+  "band_names": ["var1", "var2", "var3"],
+  "crs": "EPSG:4326",
+  "bounds": {
+    "xmin": 0.0,
+    "ymin": 0.0,
+    "xmax": 1.0,
+    "ymax": 1.0
+  }
+}

@@ -100,6 +100,10 @@ Example data is included in `example_data/` so you can run this immediately afte
 ```python
 from klrfome import KLRfome, RasterStack
 import geopandas as gpd
+import numpy as np
+import rasterio
+from sklearn.metrics import roc_auc_score
+import matplotlib.pyplot as plt
 
 # Load the included example data (200x200 rasters, 25 sites)
 raster_stack = RasterStack.from_files([
@@ -133,6 +137,76 @@ predictions = model.predict(raster_stack)
 print(f"Predictions shape: {predictions.shape}")
 print(f"Probability range: [{predictions.min():.3f}, {predictions.max():.3f}]")
 ```
+
+### Evaluate Model Performance
+
+```python
+# Extract predictions at site locations
+transform = raster_stack.transform
+site_preds = []
+for idx, row in sites.iterrows():
+    r, c = rasterio.transform.rowcol(transform, row.geometry.x, row.geometry.y)
+    if 0 <= r < predictions.shape[0] and 0 <= c < predictions.shape[1]:
+        site_preds.append(float(predictions[r, c]))
+
+# Sample background predictions
+np.random.seed(42)
+bg_preds = [float(predictions[np.random.randint(0, predictions.shape[0]),
+                              np.random.randint(0, predictions.shape[1])]) 
+            for _ in range(200)]
+
+# Compute metrics
+all_preds = site_preds + bg_preds
+all_labels = [1] * len(site_preds) + [0] * len(bg_preds)
+auc = roc_auc_score(all_labels, all_preds)
+
+# Find optimal threshold (Youden's J)
+thresholds = np.linspace(0, 1, 100)
+best_j, best_thresh = 0, 0.5
+for t in thresholds:
+    tp = sum((p >= t and l == 1) for p, l in zip(all_preds, all_labels))
+    tn = sum((p < t and l == 0) for p, l in zip(all_preds, all_labels))
+    sens = tp / sum(all_labels)
+    spec = tn / (len(all_labels) - sum(all_labels))
+    j = sens + spec - 1
+    if j > best_j:
+        best_j, best_thresh = j, t
+
+print(f"\n=== Model Performance ===")
+print(f"AUC: {auc:.3f}")
+print(f"Optimal Threshold: {best_thresh:.2f}")
+print(f"Youden's J: {best_j:.3f}")
+print(f"Site prediction mean: {np.mean(site_preds):.3f}")
+print(f"Background prediction mean: {np.mean(bg_preds):.3f}")
+```
+
+### Visualize Predictions
+
+```python
+# Plot prediction surface with site locations
+fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+
+# Plot probability surface
+im = ax.imshow(predictions, cmap='RdYlGn', vmin=0, vmax=1, origin='upper')
+plt.colorbar(im, ax=ax, label='Probability', shrink=0.8)
+
+# Overlay site locations
+for idx, row in sites.iterrows():
+    r, c = rasterio.transform.rowcol(transform, row.geometry.x, row.geometry.y)
+    ax.plot(c, r, 'ko', markersize=8, markerfacecolor='none', markeredgewidth=2)
+    ax.plot(c, r, 'k+', markersize=6, markeredgewidth=2)
+
+ax.set_title(f'KLRfome Probability Surface (AUC={auc:.3f})', fontsize=14)
+ax.set_xlabel('Column')
+ax.set_ylabel('Row')
+plt.tight_layout()
+plt.savefig('klrfome_prediction_map.png', dpi=150)
+plt.show()
+```
+
+<p align="center">
+<img src="https://github.com/mrecos/klrfome/blob/master/README_images/README-predict_rasters-1.png?raw=true">
+</p>
 
 ---
 

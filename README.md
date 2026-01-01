@@ -205,7 +205,7 @@ plt.show()
 ```
 
 <p align="center">
-<img src="https://github.com/mrecos/klrfome/blob/master/README_images/README-predict_rasters-1.png?raw=true">
+<img src="README_images/KLRfome_prediction.png" alt="KLRfome Probability Surface">
 </p>
 
 ---

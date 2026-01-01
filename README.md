@@ -292,11 +292,16 @@ scaled_training = TrainingData(
 model.fit(scaled_training)
 
 # Scale raster data with same parameters before prediction
-scaled_raster = raster_stack.copy()
-for i, name in enumerate(raster_stack.band_names):
-    scaled_raster.data = scaled_raster.data.at[i].set(
-        (raster_stack.data[i] - means[i]) / stds[i]
-    )
+scaled_data = np.zeros_like(np.array(raster_stack.data))
+for i in range(len(raster_stack.band_names)):
+    scaled_data[i] = (np.array(raster_stack.data[i]) - means[i]) / stds[i]
+
+scaled_raster = RasterStack(
+    data=jnp.array(scaled_data),
+    transform=raster_stack.transform,
+    crs=raster_stack.crs,
+    band_names=raster_stack.band_names
+)
 
 # Predict across landscape
 predictions = model.predict(scaled_raster, batch_size=1000, show_progress=True)

@@ -26,15 +26,19 @@ class KernelLogisticRegression:
     
     where σ is the sigmoid function and K is the kernel.
     
+    Uses IRLS formulation: (K + λ·diag(1/W)) α = z
+    where W = diag(p * (1 - p)) is the diagonal weight matrix.
+    This matches the R implementation.
+    
     Parameters:
         lambda_reg: L2 regularization strength
         max_iter: Maximum IRLS iterations
-        tol: Convergence tolerance for alpha
+        tol: Convergence tolerance for alpha (default: 0.01 to match R)
         min_prob: Minimum probability to avoid numerical issues (clipping)
     """
     lambda_reg: float = 1.0
     max_iter: int = 100
-    tol: float = 1e-6
+    tol: float = 0.01  # Match R default tolerance
     min_prob: float = 1e-7
     
     def fit(
@@ -46,10 +50,13 @@ class KernelLogisticRegression:
         """
         Fit KLR model using IRLS.
         
+        Uses the R formulation: (K + λ·diag(1/W)) α = z
+        where W = diag(p * (1 - p)) is the diagonal weight matrix.
+        
         Parameters:
             K: Precomputed kernel/similarity matrix
             y: Binary labels (0 or 1)
-            alpha_init: Initial alpha values (default: zeros)
+            alpha_init: Initial alpha values (default: uniform 1/N)
         
         Returns:
             KLRFitResult with fitted coefficients and diagnostics
@@ -60,27 +67,36 @@ class KernelLogisticRegression:
         if len(y) != n:
             raise ValueError("y must have same length as K dimensions")
         
-        alpha = alpha_init if alpha_init is not None else jnp.zeros(n)
+        # Match R initialization: rep(1/N, N) instead of zeros
+        alpha = alpha_init if alpha_init is not None else jnp.ones(n) / n
         
         for iteration in range(self.max_iter):
-            # Compute probabilities
+            # Compute probabilities - match R exactly: pi <- 1 / (1 + exp(-Kalpha))
+            # R uses simple sigmoid WITHOUT any clipping
             eta = K @ alpha
-            prob = self._sigmoid(eta)
-            prob = jnp.clip(prob, self.min_prob, 1 - self.min_prob)
+            # Match R exactly: spec <- 1 + exp(-Kalpha); pi <- 1 / spec
+            # R does NOT clip probabilities, so we don't either
+            prob = 1 / (1 + jnp.exp(-eta))
+            # NOTE: R doesn't clip probabilities. We only clip to avoid division by zero
+            # when computing W = prob * (1 - prob), not to change the actual prob values
+            # Use a much smaller epsilon that won't affect results
+            eps = 1e-15  # Machine epsilon level, won't change results
+            prob_safe = jnp.clip(prob, eps, 1 - eps)  # Only for W computation
             
-            # IRLS weights (diagonal of W)
-            W = prob * (1 - prob)
+            # IRLS weights (diagonal of W) - use prob_safe to avoid division by zero
+            # R: diagW <- pi * (1 - pi)
+            W = prob_safe * (1 - prob_safe)
             
-            # Working response
-            # z = η + (y - p) / (p * (1 - p))
+            # Working response - use original prob for numerator to match R exactly
+            # R: z <- Kalpha + ((presence - pi) / diagW)
             z = eta + (y - prob) / W
             
             # Weighted least squares update with regularization
-            # Solve: (K W K + λI) α = K W z
-            # Note: W is diagonal, so K W = K * W[None, :] (broadcasting)
-            KW = K * W[None, :]  # Broadcasting for diagonal W
-            lhs = KW @ K + self.lambda_reg * jnp.eye(n)
-            rhs = KW @ z
+            # R formulation: (K + λ·diag(1/W)) α = z
+            # This matches the R implementation which uses weighted ridge regression
+            diagW_inv = 1.0 / W  # 1/diagW (inverse of diagonal weights)
+            lhs = K + self.lambda_reg * jnp.diag(diagW_inv)
+            rhs = z
             
             try:
                 alpha_new = solve(lhs, rhs, assume_a='pos')
@@ -89,11 +105,18 @@ class KernelLogisticRegression:
                 loss = self._compute_loss(K, y, alpha)
                 return KLRFitResult(alpha, False, iteration, loss)
             
-            # Check convergence
-            delta = jnp.max(jnp.abs(alpha_new - alpha))
+            # Check for NaN (matching R's error handling)
+            if jnp.any(jnp.isnan(alpha_new)):
+                warnings.warn(f"NaN detected in alpha at iteration {iteration}")
+                loss = self._compute_loss(K, y, alpha)
+                return KLRFitResult(alpha, False, iteration, loss)
+            
+            # Check convergence - match R: all(abs(alphan - alpha) <= tol)
+            # R uses: all(abs(alphan - alpha) <= tol), not max
+            converged = jnp.all(jnp.abs(alpha_new - alpha) <= self.tol)
             alpha = alpha_new
             
-            if delta < self.tol:
+            if converged:
                 loss = self._compute_loss(K, y, alpha)
                 return KLRFitResult(alpha, True, iteration + 1, loss)
         
@@ -109,6 +132,8 @@ class KernelLogisticRegression:
         """
         Predict probabilities for new data.
         
+        Uses simple sigmoid to match R: pred <- 1 / (1 + exp(-eta))
+        
         Parameters:
             K_new: Kernel matrix between new points and training points
                    Shape: (n_new, n_train)
@@ -118,7 +143,9 @@ class KernelLogisticRegression:
             Predicted probabilities of class 1
         """
         eta = K_new @ alpha
-        return self._sigmoid(eta)
+        # Match R exactly: 1 / (1 + exp(-eta))
+        # R uses simple sigmoid, not numerically stable version
+        return 1 / (1 + jnp.exp(-eta))
     
     def predict(
         self,

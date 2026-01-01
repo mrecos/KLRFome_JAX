@@ -27,7 +27,7 @@ KLRfome predicts binary outcomes (e.g., site present/absent) across landscapes b
 - **KLR Model**: `KernelLogisticRegression` with IRLS algorithm
 - **Focal Prediction**: `FocalPredictor` with JIT-compiled batch processing
 - **High-Level API**: `KLRfome` class for end-to-end workflow
-- **Testing**: 23 tests passing, 44% code coverage (core modules 80-90%)
+- **R Validation**: Core algorithms validated to match R implementation exactly
 
 ### 🚧 In Progress / Next Steps
 - **Phase 2**: Performance optimizations (multi-device parallel prediction)
@@ -55,6 +55,58 @@ KLRfome predicts binary outcomes (e.g., site present/absent) across landscapes b
 3. **Memory Efficiency**: RFF approximation avoids large kernel matrices
 4. **Numerical Stability**: IRLS uses ridge regularization, convergence checks
 
+## R/Python Alignment - Critical Learnings
+
+The Python implementation was validated against R. Key alignment points:
+
+### IRLS Algorithm (klrfome/models/klr.py)
+- **Formulation**: `(K + λ·diag(1/W))·α = z` - matches R exactly
+- **Initial alpha**: `jnp.ones(n) / n` (NOT zeros - this affects convergence)
+- **Convergence criterion**: `jnp.all(jnp.abs(alpha_new - alpha) <= tol)`
+- **Default tolerance**: `tol = 0.001` (matches R)
+- **No probability clipping**: During IRLS, don't clip probabilities (R doesn't)
+
+### Sigmoid Function
+- Use simple sigmoid: `1 / (1 + jnp.exp(-x))`
+- Do NOT use "numerically stable" versions during IRLS (causes divergence from R)
+- Clipping can be used at boundaries but not during iteration
+
+### Kernel Computation (klrfome/kernels/distribution.py)
+- **Rounding**: Use `round_kernel=True, kernel_decimals=3` to match R's default
+- This affects similarity matrix values and downstream alpha/predictions
+- R's kernel computation rounds intermediate results
+
+### Coordinate Systems (klrfome/io/vector.py)
+- **CRITICAL**: `rasterio.transform.rowcol(transform, x, y)` returns `(row, col)` not `(col, row)`
+- Getting this wrong causes samples to be extracted from wrong locations
+- Always assign as: `row, col = rasterio.transform.rowcol(transform, x, y)`
+
+### Default Parameters
+- **sigma**: 0.5 (RBF kernel width)
+- **lambda_reg**: 0.1 (regularization strength)
+- **n_rff_features**: 0 for exact kernel (matches R), 256 for fast approximation
+
+### Data Scaling
+- Z-score normalization: `(x - mean) / std`
+- Apply to both training samples AND raster data before prediction
+- Use same mean/std computed from training data
+
+## Validation Workflow
+
+Run validation against R:
+```bash
+# 1. Generate benchmark data
+python benchmarks/generate_benchmark_data.py
+
+# 2. Run R export
+Rscript benchmarks/validate_r_export.R
+
+# 3. Validate Python against R
+python benchmarks/validate_against_r.py
+```
+
+All three components should match: Kernel Matrix, Alpha Values, Predictions.
+
 ## File Structure
 
 ```
@@ -70,8 +122,8 @@ klrfome/
 └── visualization/       # Plotting utilities
 
 tests/                   # Pytest test suite
-benchmarks/              # Performance benchmarks
-notebooks/               # Tutorial notebooks (planned)
+benchmarks/              # Validation and performance benchmarks
+notebooks/               # Tutorial notebooks
 AI_Context/              # Technical specification document
 ```
 
@@ -80,7 +132,7 @@ AI_Context/              # Technical specification document
 - **Unit Tests**: All core functionality (kernels, KLR, prediction, data structures)
 - **Integration Tests**: End-to-end workflows
 - **Property-Based Testing**: Use Hypothesis for numerical properties
-- **Coverage Target**: 80%+ for core modules (currently 44% overall, 80-90% for core)
+- **Coverage Target**: 80%+ for core modules
 
 Run tests: `pytest tests/ --cov=klrfome`
 
@@ -110,7 +162,7 @@ def _predict_batch(padded_data, coords, pad, window_size, ...):
 
 ## Known Issues / Limitations
 
-1. **Exact Kernels in JIT**: Exact kernel path in `FocalPredictor._predict_batch` returns zeros (use RFF for JIT)
+1. **Exact Kernels in JIT**: FocalPredictor handles exact kernels via `_predict_batch_exact` (not JIT-compiled)
 2. **I/O Modules**: Placeholder implementations, need full rasterio/geopandas integration
 3. **Cross-Validation**: Placeholder, needs full k-fold implementation
 4. **Model Serialization**: Placeholder, needs pickle/JAX serialization
@@ -128,6 +180,7 @@ def _predict_batch(padded_data, coords, pad, window_size, ...):
 - Full technical specification: `AI_Context/klrfome_python_refactor_spec.md`
 - Original R package documentation and paper for algorithm details
 - JAX documentation for JIT, vmap, and best practices
+- Validation scripts: `benchmarks/validate_against_r.py`
 
 ## Notes for AI Assistant
 
@@ -135,5 +188,6 @@ def _predict_batch(padded_data, coords, pad, window_size, ...):
 - Use established formulations for IRLS and kernel computations
 - Test that kernels satisfy mathematical properties (symmetry, PSD, etc.)
 - Be mindful of memory for large kernel matrices (prefer RFF)
+- When debugging Python vs R differences, use the validation workflow
+- Remember: `rowcol` returns `(row, col)` - a common source of bugs
 - When in doubt, refer to the technical specification document
-

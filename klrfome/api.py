@@ -52,9 +52,9 @@ class KLRfome:
         window_size: Focal window size for prediction
         seed: Random seed for reproducibility
     """
-    sigma: float = 1.0
+    sigma: float = 0.5  # Kernel bandwidth (0.5 works well for scaled data)
     lambda_reg: float = 0.1
-    n_rff_features: int = 256
+    n_rff_features: int = 256  # Use RFF approximation by default (faster)
     window_size: int = 3
     seed: int = 42
     
@@ -164,8 +164,12 @@ class KLRfome:
         self._training_data = training_data
         
         # Build similarity matrix
+        # Use rounding for exact kernel to match R implementation
+        round_kernel = (self.n_rff_features == 0)  # Only round for exact kernel
         self._similarity_matrix = self._distribution_kernel.build_similarity_matrix(
-            training_data.collections
+            training_data.collections,
+            round_kernel=round_kernel,
+            kernel_decimals=3
         )
         
         # Fit KLR

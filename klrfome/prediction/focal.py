@@ -93,8 +93,9 @@ class FocalPredictor:
             K_new = jnp.dot(window_embedding, self._training_embeddings.T)
         else:
             # Exact path: compute kernel with each training collection
+            # Round to 3 decimals to match R's KLR_predict (line 132)
             K_new = jnp.array([
-                self.distribution_kernel(window_samples, coll.samples)
+                round(float(self.distribution_kernel(window_samples, coll.samples)), 3)
                 for coll in self.training_data.collections
             ])
         
@@ -145,23 +146,38 @@ class FocalPredictor:
         if show_progress:
             iterator = tqdm(iterator, desc="Predicting")
         
+        # Check if using exact kernel (non-JIT path needed)
+        use_exact_kernel = not self.distribution_kernel._use_rff
+        
         for start_idx in iterator:
             end_idx = min(start_idx + batch_size, n_pixels)
             batch_coords = coords[start_idx:end_idx]
             
-            # Extract needed values from self for JIT compilation
-            batch_preds = self._predict_batch(
-                padded_data,
-                batch_coords,
-                pad,
-                self.window_size,
-                self._training_embeddings,
-                self.klr_alpha,
-                self.distribution_kernel._use_rff,
-                self._rff_W,
-                self._rff_b,
-                self._rff_n_features
-            )
+            if use_exact_kernel:
+                # Exact kernel: use non-JIT path since we need Python objects
+                batch_preds = self._predict_batch_exact(
+                    padded_data,
+                    batch_coords,
+                    pad,
+                    self.window_size,
+                    self.distribution_kernel,
+                    self.training_data,
+                    self.klr_alpha
+                )
+            else:
+                # RFF path: use JIT-compiled batch
+                batch_preds = self._predict_batch(
+                    padded_data,
+                    batch_coords,
+                    pad,
+                    self.window_size,
+                    self._training_embeddings,
+                    self.klr_alpha,
+                    self.distribution_kernel._use_rff,
+                    self._rff_W,
+                    self._rff_b,
+                    self._rff_n_features
+                )
             predictions.append(batch_preds)
         
         predictions = jnp.concatenate(predictions)
@@ -229,4 +245,41 @@ class FocalPredictor:
             return 1 / (1 + jnp.exp(-eta))
         
         return vmap(predict_single)(coords)
+    
+    def _predict_batch_exact(
+        self,
+        padded_data: Float[Array, "bands h w"],
+        coords: Float[Array, "batch 2"],
+        pad: int,
+        window_size: int,
+        distribution_kernel: MeanEmbeddingKernel,
+        training_data: TrainingData,
+        klr_alpha: Float[Array, "n_train"]
+    ) -> Float[Array, "batch"]:
+        """
+        Non-JIT batch prediction for exact kernel path.
+        
+        This is slower than RFF but provides exact kernel computation.
+        """
+        predictions = []
+        
+        for coord in coords:
+            r, c = int(coord[0]), int(coord[1])
+            # Extract window (accounting for padding offset)
+            window = padded_data[:, r:r + window_size, c:c + window_size]
+            # Reshape to (n_samples, n_features)
+            window_samples = window.reshape(window.shape[0], -1).T
+            
+            # Compute kernel with each training collection
+            K_new = jnp.array([
+                jnp.round(distribution_kernel(window_samples, coll.samples), 3)
+                for coll in training_data.collections
+            ])
+            
+            # Apply KLR
+            eta = jnp.dot(K_new, klr_alpha)
+            pred = 1 / (1 + jnp.exp(-eta))
+            predictions.append(pred)
+        
+        return jnp.array(predictions)
 

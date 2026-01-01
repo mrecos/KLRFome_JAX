@@ -68,7 +68,9 @@ class MeanEmbeddingKernel:
     
     def build_similarity_matrix(
         self,
-        collections: List[SampleCollection]
+        collections: List[SampleCollection],
+        round_kernel: bool = False,
+        kernel_decimals: int = 3
     ) -> Float[Array, "N N"]:
         """
         Build the N×N similarity matrix between all collections.
@@ -114,6 +116,9 @@ class MeanEmbeddingKernel:
                         collections[i].samples, 
                         collections[j].samples
                     )
+                    # Round kernel values to match R implementation if requested
+                    if round_kernel:
+                        k_ij = jnp.round(k_ij, kernel_decimals)
                     K = K.at[i, j].set(k_ij)
                     if i != j:
                         K = K.at[j, i].set(k_ij)  # Symmetry

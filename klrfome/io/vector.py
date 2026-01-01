@@ -55,9 +55,9 @@ def extract_at_points(
         bounds = geom.bounds  # (minx, miny, maxx, maxy)
         
         # Convert to pixel coordinates
-        # Use rasterio's rowcol function
-        min_col, min_row = rasterio.transform.rowcol(transform, bounds[0], bounds[3])
-        max_col, max_row = rasterio.transform.rowcol(transform, bounds[2], bounds[1])
+        # Use rasterio's rowcol function - returns (row, col)
+        min_row, min_col = rasterio.transform.rowcol(transform, bounds[0], bounds[3])
+        max_row, max_col = rasterio.transform.rowcol(transform, bounds[2], bounds[1])
         
         # Ensure we're within raster bounds
         min_row = max(0, min_row)
@@ -81,8 +81,8 @@ def extract_at_points(
             
             # Check if point is within geometry
             if geom.contains(point) or geom.intersects(point):
-                # Convert to pixel coordinates
-                col, row = rasterio.transform.rowcol(transform, x, y)
+                # Convert to pixel coordinates - rowcol returns (row, col)
+                row, col = rasterio.transform.rowcol(transform, x, y)
                 
                 # Check bounds
                 if (0 <= row < raster_stack.height and 

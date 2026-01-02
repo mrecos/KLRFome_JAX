@@ -347,13 +347,34 @@ print(f"AUC: {auc:.3f}")
 
 ## Key Concepts
 
-### Mean Embeddings
+### Mean Embeddings (Default)
 
 Instead of collapsing a distribution to summary statistics (mean, variance), KLRfome maps distributions into a Reproducing Kernel Hilbert Space (RKHS) where the **mean embedding** preserves the full distributional information.
 
 The similarity between two distributions is computed as the inner product of their mean embeddings:
 
 $$K(P, Q) = \langle \mu_P, \mu_Q \rangle_{\mathcal{H}}$$
+
+### Wasserstein Kernel (Advanced)
+
+For distributions that differ primarily in *shape* rather than *mean* (e.g., bimodal vs unimodal), KLRfome offers a **Wasserstein kernel** option:
+
+```python
+model = KLRfome(
+    sigma=0.5,
+    kernel_type='wasserstein',  # Shape-aware comparison
+    n_projections=100           # Sliced Wasserstein approximation
+)
+```
+
+The Wasserstein kernel uses **Sliced Wasserstein distance**—an efficient approximation that projects distributions onto random 1D subspaces. This captures distributional structure that mean embeddings may miss.
+
+| Use Case | Recommended Kernel |
+|----------|-------------------|
+| Distributions differ by location/mean | `mean_embedding` (default) |
+| Distributions have similar means, different shapes | `wasserstein` |
+| Need R compatibility | `mean_embedding` |
+| Need maximum discrimination | Try both, compare AUC |
 
 ### Kernel Logistic Regression
 
@@ -434,11 +455,14 @@ All core components (kernel matrix, alpha coefficients, predictions) match the R
 
 ```python
 KLRfome(
-    sigma: float = 0.5,           # RBF kernel width
+    sigma: float = 0.5,           # Kernel bandwidth
     lambda_reg: float = 0.1,      # Regularization strength  
-    n_rff_features: int = 256,    # 0 for exact kernel
+    kernel_type: str = 'mean_embedding',  # or 'wasserstein'
+    n_rff_features: int = 256,    # For mean_embedding: 0 for exact, >0 for RFF
+    n_projections: int = 100,     # For wasserstein: Sliced Wasserstein projections
+    wasserstein_p: int = 2,       # For wasserstein: p=1 or p=2
     window_size: int = 5,         # Focal window size
-    seed: int = 42                # Random seed for RFF
+    seed: int = 42                # Random seed
 )
 ```
 

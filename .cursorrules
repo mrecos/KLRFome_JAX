@@ -18,15 +18,16 @@ KLRfome predicts binary outcomes (e.g., site present/absent) across landscapes b
 
 ## Current Implementation Status
 
-### ✅ Completed (Phase 1)
+### ✅ Completed (Phase 1 & 2)
 - **Data Structures**: `SampleCollection`, `TrainingData`, `RasterStack`
 - **Kernels**: 
   - Exact RBF kernel (`RBFKernel`)
   - Random Fourier Features approximation (`RandomFourierFeatures`)
   - Mean Embedding Kernel (`MeanEmbeddingKernel`)
+  - **Sliced Wasserstein Kernel** (`WassersteinKernel`) - captures distributional shape
 - **KLR Model**: `KernelLogisticRegression` with IRLS algorithm
-- **Focal Prediction**: `FocalPredictor` with JIT-compiled batch processing
-- **High-Level API**: `KLRfome` class for end-to-end workflow
+- **Focal Prediction**: `FocalPredictor` and `WassersteinFocalPredictor`
+- **High-Level API**: `KLRfome` class with `kernel_type` parameter
 - **R Validation**: Core algorithms validated to match R implementation exactly
 
 ### 🚧 In Progress / Next Steps
@@ -82,9 +83,42 @@ The Python implementation was validated against R. Key alignment points:
 - Always assign as: `row, col = rasterio.transform.rowcol(transform, x, y)`
 
 ### Default Parameters
-- **sigma**: 0.5 (RBF kernel width)
+- **sigma**: 0.5 (kernel bandwidth)
 - **lambda_reg**: 0.1 (regularization strength)
-- **n_rff_features**: 0 for exact kernel (matches R), 256 for fast approximation
+- **kernel_type**: 'mean_embedding' (default) or 'wasserstein'
+- **n_rff_features**: 256 for fast approximation, 0 for exact kernel (matches R)
+- **n_projections**: 100 (for Wasserstein kernel only)
+- **wasserstein_p**: 2 (order of Wasserstein distance, 1 or 2)
+
+## Wasserstein Kernel
+
+The Wasserstein kernel (`kernel_type='wasserstein'`) provides shape-aware distribution comparison:
+
+### When to Use Wasserstein
+- Distributions have similar means but different shapes (bimodal vs unimodal)
+- Multimodal environmental signatures (e.g., edge effects)
+- Shape/structure is important for discrimination
+
+### When to Use Mean Embedding (Default)
+- Distributions differ primarily by mean/location
+- Need faster computation (RFF approximation)
+- Need R compatibility
+
+### Wasserstein Parameters
+```python
+model = KLRfome(
+    sigma=0.5,
+    kernel_type='wasserstein',
+    n_projections=100,    # More = better approximation, slower
+    wasserstein_p=2       # p=2 standard, p=1 more robust to outliers
+)
+```
+
+### Sliced Wasserstein Distance
+The implementation uses Sliced Wasserstein distance (O(L × n log n)) which:
+- Projects distributions onto random 1D subspaces
+- Computes exact 1D Wasserstein via sorting
+- Averages over all projections (L = n_projections)
 
 ### Data Scaling
 - Z-score normalization: `(x - mean) / std`
@@ -112,19 +146,28 @@ All three components should match: Kernel Matrix, Alpha Values, Predictions.
 ```
 klrfome/
 ├── __init__.py          # Package exports
-├── api.py               # High-level KLRfome class
+├── api.py               # High-level KLRfome class (with kernel_type parameter)
 ├── data/                # Data structures (SampleCollection, TrainingData, RasterStack)
-├── kernels/             # Kernel implementations (RBF, RFF, MeanEmbedding)
+├── kernels/
+│   ├── rbf.py           # Exact RBF kernel
+│   ├── rff.py           # Random Fourier Features approximation
+│   ├── distribution.py  # Mean Embedding Kernel
+│   └── wasserstein.py   # Sliced Wasserstein Distance & Kernel
 ├── models/              # KLR model with IRLS
-├── prediction/          # Focal window prediction
+├── prediction/
+│   └── focal.py         # FocalPredictor & WassersteinFocalPredictor
 ├── io/                  # Raster/vector I/O (rasterio, geopandas)
 ├── utils/               # GPU detection, scaling, validation, serialization
 └── visualization/       # Plotting utilities
 
-tests/                   # Pytest test suite
-benchmarks/              # Validation and performance benchmarks
-notebooks/               # Tutorial notebooks
-AI_Context/              # Technical specification document
+tests/
+├── test_wasserstein.py  # Wasserstein kernel tests (31 tests)
+└── ...                  # Other test files
+
+benchmarks/
+├── compare_kernels.py   # Mean embedding vs Wasserstein comparison
+├── validate_against_r.py
+└── ...
 ```
 
 ## Testing Requirements

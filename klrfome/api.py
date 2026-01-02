@@ -1,7 +1,7 @@
 """High-level API for KLRfome."""
 
 from dataclasses import dataclass, field
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Literal
 import jax.numpy as jnp
 import warnings
 
@@ -9,8 +9,9 @@ from .data.formats import TrainingData, RasterStack, SampleCollection
 from .kernels.rbf import RBFKernel
 from .kernels.rff import RandomFourierFeatures
 from .kernels.distribution import MeanEmbeddingKernel
+from .kernels.wasserstein import WassersteinKernel, SlicedWassersteinDistance, estimate_sigma_from_distances
 from .models.klr import KernelLogisticRegression, KLRFitResult
-from .prediction.focal import FocalPredictor
+from .prediction.focal import FocalPredictor, WassersteinFocalPredictor
 
 
 @dataclass
@@ -20,11 +21,20 @@ class KLRfome:
     
     Example usage:
     
-        # Initialize model
+        # Initialize model with mean embedding kernel (default)
         model = KLRfome(
-            sigma=1.0,
+            sigma=0.5,
             lambda_reg=0.1,
             n_rff_features=256,
+            window_size=5
+        )
+        
+        # Or use Wasserstein kernel for shape-aware distribution comparison
+        model = KLRfome(
+            sigma=0.5,
+            lambda_reg=0.1,
+            kernel_type='wasserstein',
+            n_projections=100,
             window_size=5
         )
         
@@ -41,20 +51,23 @@ class KLRfome:
         
         # Predict
         prediction_raster = model.predict(prediction_rasters)
-        
-        # Save
-        model.save_prediction("output.tif", prediction_raster)
     
     Parameters:
-        sigma: RBF kernel bandwidth
+        sigma: Kernel bandwidth (controls similarity decay)
         lambda_reg: KLR regularization strength
-        n_rff_features: Number of random Fourier features (0 for exact kernel)
+        kernel_type: 'mean_embedding' (default) or 'wasserstein'
+        n_rff_features: Number of random Fourier features (only for mean_embedding, 0 for exact)
+        n_projections: Number of random projections (only for wasserstein)
+        wasserstein_p: Order of Wasserstein distance, 1 or 2 (only for wasserstein)
         window_size: Focal window size for prediction
         seed: Random seed for reproducibility
     """
     sigma: float = 0.5  # Kernel bandwidth (0.5 works well for scaled data)
     lambda_reg: float = 0.1
+    kernel_type: Literal['mean_embedding', 'wasserstein'] = 'mean_embedding'
     n_rff_features: int = 256  # Use RFF approximation by default (faster)
+    n_projections: int = 100  # For Wasserstein kernel
+    wasserstein_p: Literal[1, 2] = 2  # Order of Wasserstein distance
     window_size: int = 3
     seed: int = 42
     
@@ -62,22 +75,31 @@ class KLRfome:
     _training_data: Optional[TrainingData] = field(default=None, init=False)
     _similarity_matrix: Optional[jnp.ndarray] = field(default=None, init=False)
     _fit_result: Optional[KLRFitResult] = field(default=None, init=False)
-    _distribution_kernel: Optional[MeanEmbeddingKernel] = field(default=None, init=False)
+    _distribution_kernel: Optional[Union[MeanEmbeddingKernel, WassersteinKernel]] = field(default=None, init=False)
     _klr: Optional[KernelLogisticRegression] = field(default=None, init=False)
     
     def __post_init__(self):
         """Initialize kernel and KLR model."""
-        # Initialize kernel
-        if self.n_rff_features > 0:
-            base_kernel = RandomFourierFeatures(
+        # Initialize kernel based on type
+        if self.kernel_type == 'wasserstein':
+            self._distribution_kernel = WassersteinKernel(
                 sigma=self.sigma,
-                n_features=self.n_rff_features,
+                n_projections=self.n_projections,
+                p=self.wasserstein_p,
                 seed=self.seed
             )
         else:
-            base_kernel = RBFKernel(sigma=self.sigma)
+            # Mean embedding kernel (default)
+            if self.n_rff_features > 0:
+                base_kernel = RandomFourierFeatures(
+                    sigma=self.sigma,
+                    n_features=self.n_rff_features,
+                    seed=self.seed
+                )
+            else:
+                base_kernel = RBFKernel(sigma=self.sigma)
+            self._distribution_kernel = MeanEmbeddingKernel(base_kernel)
         
-        self._distribution_kernel = MeanEmbeddingKernel(base_kernel)
         self._klr = KernelLogisticRegression(lambda_reg=self.lambda_reg)
     
     def prepare_data(
@@ -164,13 +186,20 @@ class KLRfome:
         self._training_data = training_data
         
         # Build similarity matrix
-        # Use rounding for exact kernel to match R implementation
-        round_kernel = (self.n_rff_features == 0)  # Only round for exact kernel
-        self._similarity_matrix = self._distribution_kernel.build_similarity_matrix(
-            training_data.collections,
-            round_kernel=round_kernel,
-            kernel_decimals=3
-        )
+        if self.kernel_type == 'wasserstein':
+            # Wasserstein kernel
+            self._similarity_matrix = self._distribution_kernel.build_similarity_matrix(
+                training_data.collections
+            )
+        else:
+            # Mean embedding kernel
+            # Use rounding for exact kernel to match R implementation
+            round_kernel = (self.n_rff_features == 0)
+            self._similarity_matrix = self._distribution_kernel.build_similarity_matrix(
+                training_data.collections,
+                round_kernel=round_kernel,
+                kernel_decimals=3
+            )
         
         # Fit KLR
         if self._klr is None:
@@ -213,12 +242,21 @@ class KLRfome:
         if isinstance(raster_stack, list):
             raster_stack = RasterStack.from_files(raster_stack)
         
-        predictor = FocalPredictor(
-            distribution_kernel=self._distribution_kernel,
-            klr_alpha=self._fit_result.alpha,
-            training_data=self._training_data,
-            window_size=self.window_size
-        )
+        # Use appropriate predictor based on kernel type
+        if self.kernel_type == 'wasserstein':
+            predictor = WassersteinFocalPredictor(
+                wasserstein_kernel=self._distribution_kernel,
+                training_collections=self._training_data.collections,
+                klr_alpha=self._fit_result.alpha,
+                window_size=self.window_size
+            )
+        else:
+            predictor = FocalPredictor(
+                distribution_kernel=self._distribution_kernel,
+                klr_alpha=self._fit_result.alpha,
+                training_data=self._training_data,
+                window_size=self.window_size
+            )
         
         return predictor.predict_raster(
             raster_stack,
@@ -285,4 +323,55 @@ class KLRfome:
         # Implementation is now in io.vector.generate_background_points
         from klrfome.io.vector import generate_background_points
         return generate_background_points(*args, **kwargs)
+    
+    def estimate_sigma(
+        self,
+        training_data: Optional[TrainingData] = None,
+        percentile: float = 50.0
+    ) -> float:
+        """
+        Estimate a reasonable sigma based on pairwise distances.
+        
+        Should be called before fit() to help choose sigma.
+        Uses the median distance heuristic.
+        
+        Parameters:
+            training_data: Data to estimate from (uses fitted data if None)
+            percentile: Which percentile of distances to use (default: median)
+        
+        Returns:
+            Suggested sigma value
+        """
+        if training_data is None:
+            training_data = self._training_data
+        if training_data is None:
+            raise ValueError("No training data available")
+        
+        if self.kernel_type == 'wasserstein':
+            sw = SlicedWassersteinDistance(
+                n_projections=self.n_projections,
+                p=self.wasserstein_p,
+                seed=self.seed
+            )
+            distances = sw.pairwise_distances(training_data.collections)
+            return estimate_sigma_from_distances(distances, percentile)
+        else:
+            # For mean embeddings, estimate based on feature-space distances
+            # Compute mean of each collection and measure pairwise Euclidean
+            import numpy as np
+            means = []
+            for coll in training_data.collections:
+                means.append(np.mean(np.array(coll.samples), axis=0))
+            means = np.stack(means)
+            
+            # Pairwise Euclidean distances
+            n = len(means)
+            distances = np.zeros((n, n))
+            for i in range(n):
+                for j in range(i + 1, n):
+                    d = np.linalg.norm(means[i] - means[j])
+                    distances[i, j] = d
+                    distances[j, i] = d
+            
+            return float(estimate_sigma_from_distances(jnp.array(distances), percentile))
 

@@ -17,6 +17,11 @@ from .data.formats import (
 from .kernels.rbf import RBFKernel
 from .kernels.rff import RandomFourierFeatures
 from .kernels.distribution import MeanEmbeddingKernel
+from .kernels.wasserstein import (
+    SlicedWassersteinDistance,
+    WassersteinKernel,
+    estimate_sigma_from_distances,
+)
 
 # Models
 from .models.klr import (
@@ -25,7 +30,7 @@ from .models.klr import (
 )
 
 # Prediction
-from .prediction.focal import FocalPredictor
+from .prediction.focal import FocalPredictor, WassersteinFocalPredictor
 
 # High-level API
 from .api import KLRfome
@@ -41,11 +46,15 @@ __all__ = [
     "RBFKernel",
     "RandomFourierFeatures",
     "MeanEmbeddingKernel",
+    "SlicedWassersteinDistance",
+    "WassersteinKernel",
+    "estimate_sigma_from_distances",
     # Models
     "KernelLogisticRegression",
     "KLRFitResult",
     # Prediction
     "FocalPredictor",
+    "WassersteinFocalPredictor",
     # High-level API
     "KLRfome",
 ]

@@ -9,13 +9,89 @@ This module provides:
 
 import jax.numpy as jnp
 import jax.random as random
-from jax import vmap
+from jax import jit, vmap
 from functools import partial
 from typing import Optional, List, Literal
 from dataclasses import dataclass, field
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from ..data.formats import SampleCollection
+
+
+@partial(jit, static_argnames=("p",))
+def _compute_sw_jit(
+    X: Float[Array, "n d"],
+    Y: Float[Array, "m d"],
+    projections: Float[Array, "L d"],
+    p: int
+) -> Float[Array, ""]:
+    """JIT-compiled SW computation with explicit static p."""
+    X_projected = X @ projections.T  # (n, L)
+    Y_projected = Y @ projections.T  # (m, L)
+    X_sorted = jnp.sort(X_projected, axis=0)
+    Y_sorted = jnp.sort(Y_projected, axis=0)
+
+    if p == 1:
+        distances = vmap(wasserstein_1d_p1)(X_sorted.T, Y_sorted.T)
+        return jnp.mean(distances)
+
+    def w2_squared(x_sort, y_sort):
+        w2 = wasserstein_1d_p2(x_sort, y_sort)
+        return w2 ** 2
+
+    squared_distances = vmap(w2_squared)(X_sorted.T, Y_sorted.T)
+    return jnp.sqrt(jnp.mean(squared_distances))
+
+
+@partial(jit, static_argnames=("p",))
+def _compute_sw_from_sorted_jit(
+    X_sorted: Float[Array, "n L"],
+    Y_sorted: Float[Array, "m L"],
+    p: int
+) -> Float[Array, ""]:
+    """JIT-compiled SW computation from pre-sorted projections."""
+    if p == 1:
+        distances = vmap(wasserstein_1d_p1)(X_sorted.T, Y_sorted.T)
+        return jnp.mean(distances)
+
+    def w2_squared(x, y):
+        return wasserstein_1d_p2(x, y) ** 2
+
+    sq_dist = vmap(w2_squared)(X_sorted.T, Y_sorted.T)
+    return jnp.sqrt(jnp.mean(sq_dist))
+
+
+@partial(jit, static_argnames=("p",))
+def _pairwise_distances_uniform_jit(
+    projected_sorted: Float[Array, "N n L"],
+    p: int
+) -> Float[Array, "N N"]:
+    """JIT-compiled pairwise SW distances for uniform sample sizes."""
+    def dist_row(x_sorted):
+        if p == 1:
+            return jnp.mean(jnp.abs(projected_sorted - x_sorted[None, :, :]), axis=(1, 2))
+        diff = projected_sorted - x_sorted[None, :, :]
+        return jnp.sqrt(jnp.mean(diff ** 2, axis=(1, 2)))
+
+    return vmap(dist_row)(projected_sorted)
+
+
+def _resample_sorted_projections(
+    sorted_proj: Float[Array, "n L"],
+    target_n: int
+) -> Float[Array, "target_n L"]:
+    """Resample sorted projections to a target size via quantile interpolation."""
+    n = sorted_proj.shape[0]
+    if n == target_n:
+        return sorted_proj
+
+    source_q = (jnp.arange(n) + 0.5) / n
+    target_q = (jnp.arange(target_n) + 0.5) / target_n
+
+    def interp_col(col):
+        return jnp.interp(target_q, source_q, col)
+
+    return vmap(interp_col, in_axes=1, out_axes=1)(sorted_proj)
 
 
 def sample_unit_sphere(
@@ -68,8 +144,11 @@ def wasserstein_1d_p1(
     """
     n = x_sorted.shape[0]
     m = y_sorted.shape[0]
-    
-    # Use common grid approach for both equal and unequal sizes
+
+    if n == m:
+        return jnp.mean(jnp.abs(x_sorted - y_sorted))
+
+    # Use common grid approach for unequal sizes
     n_points = int(max(n, m))
     
     # Quantile positions (0 to 1)
@@ -105,7 +184,10 @@ def wasserstein_1d_p2(
     """
     n = x_sorted.shape[0]
     m = y_sorted.shape[0]
-    
+
+    if n == m:
+        return jnp.sqrt(jnp.mean((x_sorted - y_sorted) ** 2))
+
     n_points = int(max(n, m))
     quantiles = jnp.linspace(0, 1, n_points)
     
@@ -183,33 +265,12 @@ class SlicedWassersteinDistance:
         projections: Float[Array, "L d"]
     ) -> float:
         """Core computation of Sliced Wasserstein distance."""
-        
-        # Project samples onto each direction
-        # X @ projections.T gives shape (n, L) - each column is X projected onto one direction
-        X_projected = X @ projections.T  # (n, L)
-        Y_projected = Y @ projections.T  # (m, L)
-        
-        # Sort along sample axis for each projection
-        X_sorted = jnp.sort(X_projected, axis=0)  # (n, L)
-        Y_sorted = jnp.sort(Y_projected, axis=0)  # (m, L)
-        
-        # Compute 1D Wasserstein for each projection
-        if self.p == 1:
-            # W_1: use vmap over projections
-            distances = vmap(wasserstein_1d_p1)(X_sorted.T, Y_sorted.T)  # (L,)
-            return float(jnp.mean(distances))
-        else:  # p == 2
-            # W_2²: compute for each slice, average, then sqrt
-            def w2_squared(x_sort, y_sort):
-                w2 = wasserstein_1d_p2(x_sort, y_sort)
-                return w2 ** 2
-            squared_distances = vmap(w2_squared)(X_sorted.T, Y_sorted.T)
-            # Average W_2², then sqrt to get SW_2
-            return float(jnp.sqrt(jnp.mean(squared_distances)))
+        return _compute_sw_jit(X, Y, projections, int(self.p))
     
     def pairwise_distances(
         self,
-        collections: List[SampleCollection]
+        collections: List[SampleCollection],
+        bucket_tolerance: int = 0
     ) -> Float[Array, "N N"]:
         """
         Compute pairwise SW distances between all collections.
@@ -231,23 +292,55 @@ class SlicedWassersteinDistance:
         
         # Pre-project and sort all collections for efficiency
         projected_sorted = []
+        sample_sizes = []
         for coll in collections:
             proj = jnp.array(coll.samples) @ self._projections.T  # (n_samples, L)
             sorted_proj = jnp.sort(proj, axis=0)
             projected_sorted.append(sorted_proj)
-        
-        # Compute pairwise distances
+            sample_sizes.append(sorted_proj.shape[0])
+
+        # Initialize distance matrix
         distances = jnp.zeros((n, n))
-        
+
+        # Bucket by exact size (bucket_tolerance == 0) or size ranges
+        if bucket_tolerance <= 0:
+            bucket_keys = sample_sizes
+        else:
+            bucket_keys = [size // bucket_tolerance for size in sample_sizes]
+
+        buckets = {}
+        for idx, key in enumerate(bucket_keys):
+            buckets.setdefault(key, []).append(idx)
+
+        # Vectorized path within each bucket
+        for indices in buckets.values():
+            if len(indices) < 2:
+                continue
+
+            if bucket_tolerance <= 0:
+                stacked = jnp.stack([projected_sorted[i] for i in indices])
+            else:
+                sizes_in_bucket = sorted(sample_sizes[i] for i in indices)
+                target_size = sizes_in_bucket[len(sizes_in_bucket) // 2]
+                resampled = [
+                    _resample_sorted_projections(projected_sorted[i], target_size)
+                    for i in indices
+                ]
+                stacked = jnp.stack(resampled)
+
+            bucket_dist = _pairwise_distances_uniform_jit(stacked, int(self.p))
+            idx_arr = jnp.array(indices)
+            distances = distances.at[jnp.ix_(idx_arr, idx_arr)].set(bucket_dist)
+
+        # Cross-bucket pairs use exact computation
         for i in range(n):
             for j in range(i + 1, n):
-                d = self._compute_sw_from_sorted(
-                    projected_sorted[i],
-                    projected_sorted[j]
-                )
+                if bucket_keys[i] == bucket_keys[j]:
+                    continue
+                d = self._compute_sw_from_sorted(projected_sorted[i], projected_sorted[j])
                 distances = distances.at[i, j].set(d)
                 distances = distances.at[j, i].set(d)
-        
+
         return distances
     
     def _compute_sw_from_sorted(
@@ -256,14 +349,7 @@ class SlicedWassersteinDistance:
         Y_sorted: Float[Array, "m L"]
     ) -> float:
         """Compute SW from pre-projected, pre-sorted data."""
-        if self.p == 1:
-            distances = vmap(wasserstein_1d_p1)(X_sorted.T, Y_sorted.T)
-            return float(jnp.mean(distances))
-        else:
-            def w2_squared(x, y):
-                return wasserstein_1d_p2(x, y) ** 2
-            sq_dist = vmap(w2_squared)(X_sorted.T, Y_sorted.T)
-            return float(jnp.sqrt(jnp.mean(sq_dist)))
+        return _compute_sw_from_sorted_jit(X_sorted, Y_sorted, int(self.p))
 
 
 @dataclass
@@ -320,13 +406,14 @@ class WassersteinKernel:
             K(P, Q) in [0, 1], with 1 meaning identical distributions
         """
         sw_distance = self._sw(X, Y)
-        return float(jnp.exp(-sw_distance ** 2 / (2 * self.sigma ** 2)))
+        return jnp.exp(-sw_distance ** 2 / (2 * self.sigma ** 2))
     
     def build_similarity_matrix(
         self,
         collections: List[SampleCollection],
         round_kernel: bool = False,
-        kernel_decimals: int = 3
+        kernel_decimals: int = 3,
+        bucket_tolerance: int = 0
     ) -> Float[Array, "N N"]:
         """
         Build the N×N similarity matrix between all collections.
@@ -338,12 +425,17 @@ class WassersteinKernel:
             collections: List of SampleCollection objects
             round_kernel: Whether to round kernel values (for R compatibility)
             kernel_decimals: Number of decimals for rounding
+            bucket_tolerance: If > 0, group nearby sample sizes into buckets for
+                faster approximate pairwise distances. Uses exact sizes when 0.
         
         Returns:
             Kernel matrix K where K[i,j] = K(collections[i], collections[j])
         """
         # First compute distance matrix
-        distances = self._sw.pairwise_distances(collections)
+        distances = self._sw.pairwise_distances(
+            collections,
+            bucket_tolerance=bucket_tolerance
+        )
         
         # Convert to similarities via RBF
         K = jnp.exp(-distances ** 2 / (2 * self.sigma ** 2))
@@ -404,4 +496,3 @@ def estimate_sigma_from_distances(
     upper_tri_indices = jnp.triu_indices(n, k=1)
     upper_tri = distance_matrix[upper_tri_indices]
     return float(jnp.percentile(upper_tri, percentile))
-

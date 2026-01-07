@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import jax.random as random
 from jax import jit, vmap
 from functools import partial
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Dict
 from dataclasses import dataclass, field
 from jaxtyping import Array, Float, PRNGKeyArray
 
@@ -92,6 +92,46 @@ def _resample_sorted_projections(
         return jnp.interp(target_q, source_q, col)
 
     return vmap(interp_col, in_axes=1, out_axes=1)(sorted_proj)
+
+
+def _create_buckets(
+    sample_sizes: List[int],
+    bucket_width: Optional[int] = None,
+    bucket_tolerance: int = 0,
+) -> Dict[int, List[int]]:
+    """Create buckets from sample sizes using width-based ranges.
+
+    Args:
+        sample_sizes: List of distribution sizes
+        bucket_width: Width of size ranges (e.g., 25 → [0-24], [25-49], [50-74])
+        bucket_tolerance: Legacy integer division parameter (deprecated)
+
+    Returns:
+        Dictionary mapping bucket_key → list of distribution indices
+
+    Examples:
+        >>> _create_buckets([10, 15, 50, 73, 75], bucket_width=25)
+        {0: [0, 1], 2: [2, 3], 3: [4]}  # buckets [0-24], [50-74], [75-99]
+
+        >>> _create_buckets([10, 15, 50, 73], bucket_width=None, bucket_tolerance=0)
+        {10: [0], 15: [1], 50: [2], 73: [3]}  # exact mode
+    """
+    if bucket_width is not None and bucket_width > 0:
+        # New width-based bucketing
+        bucket_keys = [size // bucket_width for size in sample_sizes]
+    elif bucket_tolerance > 0:
+        # Legacy integer division (deprecated but maintained for backward compatibility)
+        bucket_keys = [size // bucket_tolerance for size in sample_sizes]
+    else:
+        # Exact mode: each unique size is its own bucket
+        bucket_keys = sample_sizes
+
+    # Group indices by bucket key
+    buckets = {}
+    for idx, key in enumerate(bucket_keys):
+        buckets.setdefault(key, []).append(idx)
+
+    return buckets
 
 
 def sample_unit_sphere(
@@ -270,14 +310,26 @@ class SlicedWassersteinDistance:
     def pairwise_distances(
         self,
         collections: List[SampleCollection],
-        bucket_tolerance: int = 0
+        bucket_tolerance: int = 0,
+        bucket_width: Optional[int] = None,
+        bucket_ceil: bool = True,
+        bucket_cap: Optional[int] = None,
     ) -> Float[Array, "N N"]:
         """
         Compute pairwise SW distances between all collections.
-        
+
         Parameters:
             collections: List of SampleCollection objects
-        
+            bucket_tolerance: DEPRECATED. Use bucket_width instead.
+                             Legacy parameter for integer division bucketing.
+            bucket_width: Group distributions by size ranges for JIT optimization.
+                         E.g., 25 creates buckets [0-24], [25-49], [50-74], etc.
+                         If None and bucket_tolerance=0, uses exact mode (no bucketing).
+            bucket_ceil: If True, resample to bucket ceiling (max size in bucket).
+                        If False, resample to bucket median.
+            bucket_cap: Global maximum sample size. Distributions larger than this
+                       are downsampled first before bucketing.
+
         Returns:
             Distance matrix of shape (N, N)
         """
@@ -302,26 +354,52 @@ class SlicedWassersteinDistance:
         # Initialize distance matrix
         distances = jnp.zeros((n, n))
 
-        # Bucket by exact size (bucket_tolerance == 0) or size ranges
-        if bucket_tolerance <= 0:
-            bucket_keys = sample_sizes
-        else:
-            bucket_keys = [size // bucket_tolerance for size in sample_sizes]
+        # Apply global cap first (if specified)
+        capped_sizes = sample_sizes
+        if bucket_cap is not None and bucket_cap > 0:
+            capped_sizes = [min(size, bucket_cap) for size in sample_sizes]
+            # Downsample projections that exceed cap
+            projected_sorted_capped = []
+            for i, size in enumerate(sample_sizes):
+                if size > bucket_cap:
+                    projected_sorted_capped.append(
+                        _resample_sorted_projections(projected_sorted[i], bucket_cap)
+                    )
+                else:
+                    projected_sorted_capped.append(projected_sorted[i])
+            projected_sorted = projected_sorted_capped
 
-        buckets = {}
-        for idx, key in enumerate(bucket_keys):
-            buckets.setdefault(key, []).append(idx)
+        # Create buckets using new helper
+        buckets = _create_buckets(capped_sizes, bucket_width, bucket_tolerance)
+
+        # For cross-bucket comparisons, we need bucket_keys
+        if bucket_width is not None and bucket_width > 0:
+            bucket_keys = [size // bucket_width for size in capped_sizes]
+        elif bucket_tolerance > 0:
+            bucket_keys = [size // bucket_tolerance for size in capped_sizes]
+        else:
+            bucket_keys = capped_sizes
 
         # Vectorized path within each bucket
         for indices in buckets.values():
             if len(indices) < 2:
                 continue
 
-            if bucket_tolerance <= 0:
+            # Check if we need resampling (bucketing active)
+            needs_resampling = (bucket_width is not None and bucket_width > 0) or bucket_tolerance > 0
+
+            if not needs_resampling:
+                # Exact mode: no resampling, distributions must already be same size
                 stacked = jnp.stack([projected_sorted[i] for i in indices])
             else:
-                sizes_in_bucket = sorted(sample_sizes[i] for i in indices)
-                target_size = sizes_in_bucket[len(sizes_in_bucket) // 2]
+                # Determine target size for this bucket
+                sizes_in_bucket = sorted(capped_sizes[i] for i in indices)
+                if bucket_ceil:
+                    target_size = sizes_in_bucket[-1]  # Ceiling (max)
+                else:
+                    target_size = sizes_in_bucket[len(sizes_in_bucket) // 2]  # Median
+
+                # Resample all distributions in bucket to target size
                 resampled = [
                     _resample_sorted_projections(projected_sorted[i], target_size)
                     for i in indices
@@ -413,28 +491,36 @@ class WassersteinKernel:
         collections: List[SampleCollection],
         round_kernel: bool = False,
         kernel_decimals: int = 3,
-        bucket_tolerance: int = 0
+        bucket_tolerance: int = 0,
+        bucket_width: Optional[int] = None,
+        bucket_ceil: bool = True,
+        bucket_cap: Optional[int] = None,
     ) -> Float[Array, "N N"]:
         """
         Build the N×N similarity matrix between all collections.
-        
+
         This is the kernel matrix used for KLR fitting.
         Matches the interface of MeanEmbeddingKernel.build_similarity_matrix.
-        
+
         Parameters:
             collections: List of SampleCollection objects
             round_kernel: Whether to round kernel values (for R compatibility)
             kernel_decimals: Number of decimals for rounding
-            bucket_tolerance: If > 0, group nearby sample sizes into buckets for
-                faster approximate pairwise distances. Uses exact sizes when 0.
-        
+            bucket_tolerance: DEPRECATED. Use bucket_width instead.
+            bucket_width: Group distributions by size ranges for JIT optimization.
+            bucket_ceil: Resample to bucket ceiling (True) or median (False).
+            bucket_cap: Global maximum sample size for very large distributions.
+
         Returns:
             Kernel matrix K where K[i,j] = K(collections[i], collections[j])
         """
         # First compute distance matrix
         distances = self._sw.pairwise_distances(
             collections,
-            bucket_tolerance=bucket_tolerance
+            bucket_tolerance=bucket_tolerance,
+            bucket_width=bucket_width,
+            bucket_ceil=bucket_ceil,
+            bucket_cap=bucket_cap,
         )
         
         # Convert to similarities via RBF

@@ -59,6 +59,10 @@ class KLRfome:
         n_rff_features: Number of random Fourier features (only for mean_embedding, 0 for exact)
         n_projections: Number of random projections (only for wasserstein)
         wasserstein_p: Order of Wasserstein distance, 1 or 2 (only for wasserstein)
+        bucket_width: For Wasserstein kernel - group distributions by size ranges (e.g., 25 for [0-24], [25-49], ...)
+                     Default None uses exact mode. Recommended: 25 for real data with variable sizes.
+        bucket_ceil: For Wasserstein kernel - resample to bucket ceiling (max) vs median
+        bucket_cap: For Wasserstein kernel - global maximum sample size (e.g., 2500)
         window_size: Focal window size for prediction
         seed: Random seed for reproducibility
     """
@@ -68,6 +72,9 @@ class KLRfome:
     n_rff_features: int = 256  # Use RFF approximation by default (faster)
     n_projections: int = 100  # For Wasserstein kernel
     wasserstein_p: Literal[1, 2] = 2  # Order of Wasserstein distance
+    bucket_width: Optional[int] = None  # For Wasserstein bucketing
+    bucket_ceil: bool = True  # For Wasserstein bucketing
+    bucket_cap: Optional[int] = None  # For Wasserstein bucketing
     window_size: int = 3
     seed: int = 42
     
@@ -189,7 +196,10 @@ class KLRfome:
         if self.kernel_type == 'wasserstein':
             # Wasserstein kernel
             self._similarity_matrix = self._distribution_kernel.build_similarity_matrix(
-                training_data.collections
+                training_data.collections,
+                bucket_width=self.bucket_width,
+                bucket_ceil=self.bucket_ceil,
+                bucket_cap=self.bucket_cap,
             )
         else:
             # Mean embedding kernel

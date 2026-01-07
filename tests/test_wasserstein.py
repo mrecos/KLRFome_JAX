@@ -409,6 +409,193 @@ class TestIntegration:
         
         mean_site_site = jnp.mean(site_site_sim[jnp.triu_indices(n_sites, k=1)])
         mean_site_bg = jnp.mean(site_bg_sim)
-        
+
         assert mean_site_site > mean_site_bg
+
+
+class TestBucketing:
+    """Tests for the new bucketing functionality."""
+
+    def test_bucket_creation_with_width(self):
+        """Test _create_buckets() with bucket_width parameter."""
+        from klrfome.kernels.wasserstein import _create_buckets
+
+        sizes = [10, 15, 23, 50, 73, 75, 100]
+        buckets = _create_buckets(sizes, bucket_width=25)
+
+        # Should create buckets: [0-24], [25-49], [50-74], [75-99], [100-124]
+        assert 0 in buckets  # 10, 15, 23
+        assert len(buckets[0]) == 3
+        assert 2 in buckets  # 50, 73
+        assert len(buckets[2]) == 2
+        assert 3 in buckets  # 75
+        assert 4 in buckets  # 100
+
+    def test_bucket_creation_exact_mode(self):
+        """Test _create_buckets() in exact mode (no bucketing)."""
+        from klrfome.kernels.wasserstein import _create_buckets
+
+        sizes = [10, 15, 50, 73]
+        buckets = _create_buckets(sizes, bucket_width=None, bucket_tolerance=0)
+
+        # Each unique size should be its own bucket
+        assert 10 in buckets
+        assert 15 in buckets
+        assert 50 in buckets
+        assert 73 in buckets
+
+    def test_bucket_creation_legacy_tolerance(self):
+        """Test _create_buckets() with legacy bucket_tolerance parameter."""
+        from klrfome.kernels.wasserstein import _create_buckets
+
+        sizes = [10, 15, 20, 25]
+        buckets = _create_buckets(sizes, bucket_width=None, bucket_tolerance=5)
+
+        # bucket_tolerance=5 uses integer division
+        # 10//5=2, 15//5=3, 20//5=4, 25//5=5
+        assert 2 in buckets
+        assert 3 in buckets
+        assert 4 in buckets
+        assert 5 in buckets
+
+    def test_bucketing_ceiling_vs_median(self):
+        """Test that bucket_ceil parameter affects target size selection."""
+        # Create test collections with sizes [25, 30, 35, 40] (all in same bucket)
+        key = random.PRNGKey(42)
+        collections = []
+        for size in [25, 30, 35, 40]:
+            samples = random.normal(key, shape=(size, 3))
+            collections.append(SampleCollection(
+                samples=samples,
+                label=1,
+                id=f"coll_{size}"
+            ))
+            key, _ = random.split(key)
+
+        distance_fn = SlicedWassersteinDistance(n_projections=10, seed=42)
+
+        # Test ceiling mode (should target 40)
+        K_ceil = distance_fn.pairwise_distances(
+            collections, bucket_width=50, bucket_ceil=True
+        )
+
+        # Test median mode (should target 32 or 33)
+        K_median = distance_fn.pairwise_distances(
+            collections, bucket_width=50, bucket_ceil=False
+        )
+
+        # Matrices should differ slightly due to different target sizes
+        assert not jnp.allclose(K_ceil, K_median, atol=1e-6)
+
+    def test_global_bucket_cap(self):
+        """Test that bucket_cap limits maximum sample size."""
+        # Create collections with sizes [100, 5000]
+        key = random.PRNGKey(42)
+        collections = [
+            SampleCollection(
+                samples=random.normal(key, shape=(100, 3)),
+                label=1,
+                id="small"
+            ),
+            SampleCollection(
+                samples=random.normal(random.PRNGKey(123), shape=(5000, 3)),
+                label=1,
+                id="large"
+            )
+        ]
+
+        distance_fn = SlicedWassersteinDistance(n_projections=10, seed=42)
+
+        # With cap=2500, the 5000-sample collection should be downsampled
+        K = distance_fn.pairwise_distances(
+            collections, bucket_width=25, bucket_cap=2500
+        )
+
+        # Should complete without error and produce valid similarity matrix
+        assert K.shape == (2, 2)
+        assert jnp.all(jnp.isfinite(K))
+        # Distance matrix should be symmetric
+        assert jnp.allclose(K, K.T, atol=1e-5)
+
+    def test_exact_mode_vs_bucketing(self):
+        """Test that exact mode (no bucketing) differs from bucketing mode."""
+        key = random.PRNGKey(42)
+        collections = []
+        for size in [48, 50, 52]:
+            samples = random.normal(key, shape=(size, 3))
+            collections.append(SampleCollection(
+                samples=samples,
+                label=1,
+                id=f"coll_{size}"
+            ))
+            key, _ = random.split(key)
+
+        distance_fn = SlicedWassersteinDistance(n_projections=100, seed=42)
+
+        # Exact mode
+        K_exact = distance_fn.pairwise_distances(collections, bucket_width=None)
+
+        # Bucketing mode (all -> 52 samples via bucket_width=25)
+        K_bucketed = distance_fn.pairwise_distances(
+            collections, bucket_width=25, bucket_ceil=True
+        )
+
+        # Should differ slightly
+        assert not jnp.allclose(K_exact, K_bucketed, atol=1e-4)
+        # But should be reasonably close (quantile interpolation is nearly lossless)
+        assert jnp.allclose(K_exact, K_bucketed, atol=0.15)
+
+    def test_backward_compatibility_bucket_tolerance(self):
+        """Test that legacy bucket_tolerance parameter still works."""
+        key = random.PRNGKey(42)
+        collections = []
+        for size in [48, 50, 52, 98, 100, 102]:
+            samples = random.normal(key, shape=(size, 3))
+            collections.append(SampleCollection(
+                samples=samples,
+                label=1,
+                id=f"coll_{size}"
+            ))
+            key, _ = random.split(key)
+
+        distance_fn = SlicedWassersteinDistance(n_projections=50, seed=42)
+
+        # Use legacy bucket_tolerance (should still work)
+        K = distance_fn.pairwise_distances(
+            collections, bucket_tolerance=10
+        )
+
+        # Should complete without error
+        assert K.shape == (6, 6)
+        assert jnp.all(jnp.isfinite(K))
+        assert jnp.allclose(K, K.T, atol=1e-5)
+
+    def test_wasserstein_kernel_with_bucketing(self):
+        """Test WassersteinKernel.build_similarity_matrix() with bucketing parameters."""
+        key = random.PRNGKey(42)
+        collections = []
+        for i, size in enumerate([25, 30, 50, 75, 100]):
+            samples = random.normal(key, shape=(size, 3))
+            collections.append(SampleCollection(
+                samples=samples,
+                label=i % 2,  # Alternate labels
+                id=f"coll_{i}"
+            ))
+            key, _ = random.split(key)
+
+        kernel = WassersteinKernel(sigma=1.0, n_projections=100, seed=42)
+        K = kernel.build_similarity_matrix(
+            collections,
+            bucket_width=25,
+            bucket_ceil=True,
+            bucket_cap=200
+        )
+
+        # Verify properties
+        assert K.shape == (5, 5)
+        assert jnp.allclose(K, K.T, atol=1e-5)
+        # Diagonal should be close to 1 (self-similarity)
+        assert jnp.allclose(jnp.diag(K), 1.0, atol=1e-3)
+        assert jnp.all(K >= 0)
+        assert jnp.all(K <= 1)
 

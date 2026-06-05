@@ -76,6 +76,25 @@ def _pairwise_distances_uniform_jit(
     return vmap(dist_row)(projected_sorted)
 
 
+@partial(jit, static_argnames=("p",))
+def _cross_distances_uniform_jit(
+    A: Float[Array, "Na Q L"],
+    B: Float[Array, "Nb Q L"],
+    p: int,
+) -> Float[Array, "Na Nb"]:
+    """JIT cross SW distances between two uniform-size quantile stacks.
+
+    A[i] vs B[j] for all i, j. Both must share the same (Q, L). Single compile.
+    """
+    def dist_row(a):  # a: (Q, L)
+        diff = B - a[None, :, :]
+        if p == 1:
+            return jnp.mean(jnp.abs(diff), axis=(1, 2))
+        return jnp.sqrt(jnp.mean(diff ** 2, axis=(1, 2)))
+
+    return vmap(dist_row)(A)
+
+
 def _resample_sorted_projections(
     sorted_proj: Float[Array, "n L"],
     target_n: int
@@ -429,6 +448,51 @@ class SlicedWassersteinDistance:
         """Compute SW from pre-projected, pre-sorted data."""
         return _compute_sw_from_sorted_jit(X_sorted, Y_sorted, int(self.p))
 
+    # ------------------------------------------------------------------
+    # Single-global-Q quantile representation (fast, JIT-friendly).
+    #
+    # Each bag is projected, sorted, and resampled to the SAME number of
+    # quantile points Q. Every bag is then a (Q, L) tensor, so all pairwise
+    # (or cross) SW distances are a single uniform-shape, vmapped op that XLA
+    # compiles ONCE -- instead of recompiling per unique bag-size pair. Because
+    # 1-D Wasserstein depends only on the quantile function, Q quantiles are a
+    # faithful (and, as Q grows, exact) summary of each projected marginal.
+    # ------------------------------------------------------------------
+    def quantile_embeddings(
+        self,
+        collections: List[SampleCollection],
+        n_quantiles: int,
+    ) -> Float[Array, "N Q L"]:
+        """Project, sort, and resample every bag to ``n_quantiles`` points."""
+        dim = collections[0].samples.shape[1]
+        self._ensure_projections(dim)
+        embs = []
+        for coll in collections:
+            proj = jnp.asarray(coll.samples) @ self._projections.T  # (n, L)
+            sorted_proj = jnp.sort(proj, axis=0)
+            embs.append(_resample_sorted_projections(sorted_proj, n_quantiles))
+        return jnp.stack(embs)  # (N, Q, L)
+
+    def pairwise_distances_quantile(
+        self,
+        collections: List[SampleCollection],
+        n_quantiles: int,
+    ) -> Float[Array, "N N"]:
+        """Fast N×N SW distance matrix via the global-Q quantile representation."""
+        emb = self.quantile_embeddings(collections, n_quantiles)
+        return _pairwise_distances_uniform_jit(emb, int(self.p))
+
+    def cross_distances_quantile(
+        self,
+        new_collections: List[SampleCollection],
+        train_collections: List[SampleCollection],
+        n_quantiles: int,
+    ) -> Float[Array, "Nnew Ntrain"]:
+        """Fast (new × train) SW distance matrix via the global-Q representation."""
+        a = self.quantile_embeddings(new_collections, n_quantiles)
+        b = self.quantile_embeddings(train_collections, n_quantiles)
+        return _cross_distances_uniform_jit(a, b, int(self.p))
+
 
 @dataclass
 class WassersteinKernel:
@@ -491,6 +555,7 @@ class WassersteinKernel:
         collections: List[SampleCollection],
         round_kernel: bool = False,
         kernel_decimals: int = 3,
+        n_quantiles: Optional[int] = None,
         bucket_tolerance: int = 0,
         bucket_width: Optional[int] = None,
         bucket_ceil: bool = True,
@@ -515,14 +580,18 @@ class WassersteinKernel:
             Kernel matrix K where K[i,j] = K(collections[i], collections[j])
         """
         # First compute distance matrix
-        distances = self._sw.pairwise_distances(
-            collections,
-            bucket_tolerance=bucket_tolerance,
-            bucket_width=bucket_width,
-            bucket_ceil=bucket_ceil,
-            bucket_cap=bucket_cap,
-        )
-        
+        if n_quantiles is not None:
+            # Fast path: single global-Q quantile representation (one JIT compile).
+            distances = self._sw.pairwise_distances_quantile(collections, n_quantiles)
+        else:
+            distances = self._sw.pairwise_distances(
+                collections,
+                bucket_tolerance=bucket_tolerance,
+                bucket_width=bucket_width,
+                bucket_ceil=bucket_ceil,
+                bucket_cap=bucket_cap,
+            )
+
         # Convert to similarities via RBF
         K = jnp.exp(-distances ** 2 / (2 * self.sigma ** 2))
         

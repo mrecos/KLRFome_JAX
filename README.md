@@ -115,10 +115,12 @@ sites = gpd.read_file('example_data/sites.geojson')
 
 # Initialize model with hyperparameters
 model = KLRfome(
-    sigma=0.5,          # RBF kernel width (controls similarity decay)
-    lambda_reg=0.1,     # Regularization strength
-    window_size=5,      # Focal window size for prediction
-    n_rff_features=256  # Random Fourier Features (0 for exact kernel)
+    lambda_reg=0.1,      # Regularization strength
+    window_size=5,       # Focal window size for prediction
+    n_rff_features=256,  # Random Fourier Features (0 for exact kernel)
+    # By default the bandwidth is auto-calibrated to the data (auto_sigma=True) and
+    # covariates are z-scored using training stats (scale_features=True). Pass
+    # sigma=... with auto_sigma=False to set the bandwidth manually.
 )
 
 # Prepare training data: extract samples at sites and background locations
@@ -259,55 +261,37 @@ print(f"Training collections: {len(training_data.collections)}")
 print(f"Features: {training_data.feature_names}")
 ```
 
-### 3. Scale Data
+### 3. Scaling & bandwidth are automatic
 
-For best results, z-score normalize your features:
+Two things that are easy to get wrong are handled for you by default:
+
+- **Feature scaling** (`scale_features=True`): covariates are z-scored using the
+  training statistics, and the *same* statistics are re-applied to the prediction
+  raster. (Mirrors the R package's `format_site_data` + `scale_prediction_rasters`.)
+- **Bandwidth calibration** (`auto_sigma=True`): `sigma` is set from the data via
+  the median pairwise-distance heuristic at `fit()` time.
+
+> **Why this matters:** the RBF bandwidth must scale with the number of covariates.
+> A fixed small `sigma` (e.g. 0.5) is fine for 2–3 features but **saturates the
+> kernel to ~0 in higher dimensions** — for *d* z-scored features a typical squared
+> distance is ≈ 2·*d*, so `exp(-2d / 2σ²)` underflows — which silently makes
+> predictions no better than random. Auto-calibration prevents this failure mode.
+
+To control them manually:
 
 ```python
-import jax.numpy as jnp
-from klrfome.data.formats import SampleCollection, TrainingData
-
-# Compute scaling parameters from training data
-all_samples = np.vstack([np.array(c.samples) for c in training_data.collections])
-means = np.mean(all_samples, axis=0)
-stds = np.std(all_samples, axis=0)
-stds = np.where(stds < 1e-10, 1.0, stds)  # Avoid division by zero
-
-# Scale collections
-def scale_collection(c):
-    scaled = (jnp.array(c.samples) - means) / stds
-    return SampleCollection(samples=scaled, label=c.label, id=c.id)
-
-scaled_training = TrainingData(
-    collections=[scale_collection(c) for c in training_data.collections],
-    feature_names=training_data.feature_names,
-    crs=training_data.crs
-)
+model = KLRfome(sigma=3.0, auto_sigma=False, scale_features=False)
 ```
 
 ### 4. Fit Model and Predict
 
 ```python
-# Fit model on scaled data
-model.fit(scaled_training)
-
-# Scale raster data with same parameters before prediction
-scaled_data = np.zeros_like(np.array(raster_stack.data))
-for i in range(len(raster_stack.band_names)):
-    scaled_data[i] = (np.array(raster_stack.data[i]) - means[i]) / stds[i]
-
-scaled_raster = RasterStack(
-    data=jnp.array(scaled_data),
-    transform=raster_stack.transform,
-    crs=raster_stack.crs,
-    band_names=raster_stack.band_names
-)
-
-# Predict across landscape
-predictions = model.predict(scaled_raster, batch_size=1000, show_progress=True)
+model.fit(training_data)          # scaling + sigma calibration happen here
+predictions = model.predict(raster_stack, batch_size=1000, show_progress=True)
 
 # predictions is a 2D array of probabilities [0, 1]
 print(f"Prediction range: [{predictions.min():.3f}, {predictions.max():.3f}]")
+print(f"Calibrated sigma: {model.sigma:.3f}")
 ```
 
 <p align="left">
@@ -342,6 +326,44 @@ all_labels = [1] * len(site_preds) + [0] * len(bg_preds)
 auc = roc_auc_score(all_labels, all_preds)
 print(f"AUC: {auc:.3f}")
 ```
+
+---
+
+## Working with tabular (pre-extracted) data
+
+If your covariates are already extracted to a table (one row per cell, with a
+`presence` flag, a `SITENO` group id, covariate columns, and `x`/`y` coordinates),
+use the helpers in `klrfome.data.tabular` instead of raster extraction:
+
+```python
+import pandas as pd
+from klrfome.data.tabular import (
+    bags_from_dataframe, stratified_bag_split, scale_bags,
+    median_sigma, mean_embedding_heldout,
+)
+
+df = pd.read_csv("my_site_data.csv")
+bags = bags_from_dataframe(df, background="spatial")     # spatial k-NN background patches
+train, test = stratified_bag_split(bags, test_fraction=0.3)
+train_s, test_s, mu, sd = scale_bags(train, test)
+auc, probs, y = mean_embedding_heldout(train_s, test_s, sigma=median_sigma(train_s))
+print(f"held-out AUC = {auc:.3f}")
+```
+
+**Background construction matters.** `background="spatial"` builds each background
+bag as a compact k-NN patch in `x`/`y`, so it carries the same within-bag spatial
+autocorrelation a real site does. Random background bags (scattered cells) are an
+easy giveaway that *inflates* AUC — use `background="random"` only as a baseline.
+
+**Spatial domain.** You can only predict where covariates exist, and the model is
+valid only within the region the *background* was sampled from. If background covers
+only part of the study area, clip sites to that footprint explicitly with
+`restrict_to_background_domain(df)` rather than silently scoring out-of-domain sites.
+
+An end-to-end, annotated walkthrough — bag construction, sigma calibration, both
+kernels, confusion matrix at the optimal threshold, gain/capture curve, calibration
+curve, permutation importance, and a prediction-probability map — is in
+**`notebooks/04_real_data_validation.ipynb`**.
 
 ---
 
@@ -455,13 +477,15 @@ All core components (kernel matrix, alpha coefficients, predictions) match the R
 
 ```python
 KLRfome(
-    sigma: float = 0.5,           # Kernel bandwidth
-    lambda_reg: float = 0.1,      # Regularization strength  
+    sigma: float = 0.5,           # Kernel bandwidth (used when auto_sigma=False)
+    lambda_reg: float = 0.1,      # Regularization strength
     kernel_type: str = 'mean_embedding',  # or 'wasserstein'
     n_rff_features: int = 256,    # For mean_embedding: 0 for exact, >0 for RFF
     n_projections: int = 100,     # For wasserstein: Sliced Wasserstein projections
     wasserstein_p: int = 2,       # For wasserstein: p=1 or p=2
     window_size: int = 5,         # Focal window size
+    scale_features: bool = True,  # z-score covariates with training stats
+    auto_sigma: bool = True,      # calibrate sigma from data at fit() time
     seed: int = 42                # Random seed
 )
 ```

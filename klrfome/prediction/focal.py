@@ -55,6 +55,26 @@ class FocalPredictor:
             self._rff_W = None
             self._rff_b = None
             self._rff_n_features = None
+            # Exact mean-embedding path: pack the (variable-length) training bags
+            # into a padded (n_train, max_m, d) tensor plus a validity mask so the
+            # kernel for every pixel can be computed in a single jit+vmap pass
+            # instead of a Python loop with a host-sync per training bag.
+            bags = [jnp.asarray(c.samples) for c in self.training_data.collections]
+            n_train = len(bags)
+            max_m = max(int(b.shape[0]) for b in bags)
+            d = int(bags[0].shape[1])
+            stack = jnp.zeros((n_train, max_m, d))
+            mask = jnp.zeros((n_train, max_m))
+            counts = []
+            for t, b in enumerate(bags):
+                mt = int(b.shape[0])
+                stack = stack.at[t, :mt, :].set(b)
+                mask = mask.at[t, :mt].set(1.0)
+                counts.append(mt)
+            self._train_stack = stack
+            self._train_mask = mask
+            self._train_count = jnp.asarray(counts, dtype=jnp.float32)
+            self._exact_sigma = float(self.distribution_kernel.base_kernel.sigma)
     
     def _compute_training_embeddings(self) -> Float[Array, "n_train D"]:
         """Precompute mean embeddings for all training collections."""
@@ -155,15 +175,19 @@ class FocalPredictor:
             batch_coords = coords[start_idx:end_idx]
             
             if use_exact_kernel:
-                # Exact kernel: use non-JIT path since we need Python objects
-                batch_preds = self._predict_batch_exact(
+                # Exact kernel: fully JIT+vmap'd over the padded/masked training
+                # tensor (fast AND exact, replacing the old per-pixel Python loop).
+                batch_preds = self._predict_batch_exact_jit(
                     padded_data,
                     batch_coords,
                     pad,
                     self.window_size,
-                    self.distribution_kernel,
-                    self.training_data,
-                    self.klr_alpha
+                    self._train_stack,
+                    self._train_mask,
+                    self._train_count,
+                    self.klr_alpha,
+                    self._exact_sigma,
+                    True,  # round kernel to 3 decimals to match R's KLR_predict
                 )
             else:
                 # RFF path: use JIT-compiled batch
@@ -218,10 +242,12 @@ class FocalPredictor:
         """
         def predict_single(coord):
             r, c = coord
-            # Extract window (accounting for padding offset)
+            # Extract the window centred on output pixel (r, c). In padded
+            # coordinates the slice starts at (r, c) and spans window_size, which
+            # is centred on (r+pad, c+pad) == original (r, c).
             window = lax.dynamic_slice(
                 padded_data,
-                (0, r + pad, c + pad),
+                (0, r, c),
                 (padded_data.shape[0], window_size, window_size)
             )
             # Reshape to (n_samples, n_features)
@@ -281,8 +307,58 @@ class FocalPredictor:
             eta = jnp.dot(K_new, klr_alpha)
             pred = 1 / (1 + jnp.exp(-eta))
             predictions.append(pred)
-        
+
         return jnp.array(predictions)
+
+    @staticmethod
+    @partial(jit, static_argnames=['window_size', 'round_kernel'])
+    def _predict_batch_exact_jit(
+        padded_data: Float[Array, "bands h w"],
+        coords: Float[Array, "batch 2"],
+        pad: int,
+        window_size: int,
+        train_stack: Float[Array, "n_train max_m d"],
+        train_mask: Float[Array, "n_train max_m"],
+        train_count: Float[Array, "n_train"],
+        klr_alpha: Float[Array, "n_train"],
+        sigma: float,
+        round_kernel: bool,
+    ) -> Float[Array, "batch"]:
+        """
+        Vectorized exact mean-embedding focal prediction.
+
+        For each focal window W (window_size**2 samples) and each training bag B_t
+        (padded to max_m, masked), computes the mean-embedding RBF similarity
+
+            K(W, B_t) = (1 / (|W| |B_t|)) * sum_{i,j} exp(-||w_i - b_{t,j}||^2 / 2 sigma^2)
+
+        using the identity ||w - b||^2 = ||w||^2 + ||b||^2 - 2 w.b, then applies the
+        fitted KLR coefficients. Fully JIT-compiled and vmapped over pixels, so the
+        accurate path runs at RFF-like speed.
+        """
+        n_bands = padded_data.shape[0]
+        inv_2s2 = 1.0 / (2.0 * sigma ** 2)
+        m = window_size * window_size  # static window sample count
+        b_sq = jnp.sum(train_stack ** 2, axis=2)  # (n_train, max_m)
+
+        def predict_single(coord):
+            r, c = coord[0], coord[1]
+            window = lax.dynamic_slice(
+                padded_data, (0, r, c), (n_bands, window_size, window_size)
+            )
+            w = window.reshape(n_bands, -1).T  # (m, d)
+            w_sq = jnp.sum(w ** 2, axis=1)  # (m,)
+            cross = jnp.einsum('nmd,id->nmi', train_stack, w)  # (n_train, max_m, m)
+            sq_dist = b_sq[:, :, None] + w_sq[None, None, :] - 2.0 * cross
+            rbf = jnp.exp(-sq_dist * inv_2s2) * train_mask[:, :, None]
+            # mean over valid training samples (count) and over window samples (m)
+            K = jnp.sum(rbf, axis=(1, 2)) / (train_count * m)  # (n_train,)
+            if round_kernel:
+                K = jnp.round(K, 3)
+            eta = jnp.dot(K, klr_alpha)
+            return 1.0 / (1.0 + jnp.exp(-eta))
+
+        return vmap(predict_single)(coords)
 
 
 @dataclass

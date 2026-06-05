@@ -59,6 +59,10 @@ class KLRfome:
         n_rff_features: Number of random Fourier features (only for mean_embedding, 0 for exact)
         n_projections: Number of random projections (only for wasserstein)
         wasserstein_p: Order of Wasserstein distance, 1 or 2 (only for wasserstein)
+        bucket_width: For Wasserstein kernel - group distributions by size ranges (e.g., 25 for [0-24], [25-49], ...)
+                     Default None uses exact mode. Recommended: 25 for real data with variable sizes.
+        bucket_ceil: For Wasserstein kernel - resample to bucket ceiling (max) vs median
+        bucket_cap: For Wasserstein kernel - global maximum sample size (e.g., 2500)
         window_size: Focal window size for prediction
         seed: Random seed for reproducibility
     """
@@ -68,11 +72,18 @@ class KLRfome:
     n_rff_features: int = 256  # Use RFF approximation by default (faster)
     n_projections: int = 100  # For Wasserstein kernel
     wasserstein_p: Literal[1, 2] = 2  # Order of Wasserstein distance
+    bucket_width: Optional[int] = None  # For Wasserstein bucketing
+    bucket_ceil: bool = True  # For Wasserstein bucketing
+    bucket_cap: Optional[int] = None  # For Wasserstein bucketing
     window_size: int = 3
     seed: int = 42
-    
+    scale_features: bool = True  # z-score covariates (matches R format_site_data)
+    auto_sigma: bool = True  # calibrate sigma to the data at fit() time (median-distance heuristic)
+
     # Fitted attributes (set after fit())
     _training_data: Optional[TrainingData] = field(default=None, init=False)
+    _feature_means: Optional[jnp.ndarray] = field(default=None, init=False)
+    _feature_stds: Optional[jnp.ndarray] = field(default=None, init=False)
     _similarity_matrix: Optional[jnp.ndarray] = field(default=None, init=False)
     _fit_result: Optional[KLRFitResult] = field(default=None, init=False)
     _distribution_kernel: Optional[Union[MeanEmbeddingKernel, WassersteinKernel]] = field(default=None, init=False)
@@ -125,21 +136,24 @@ class KLRfome:
         Returns:
             TrainingData object ready for fitting
         """
-        from klrfome.io.vector import extract_at_points, generate_background_points
-        
+        from klrfome.io.vector import (
+            extract_distribution_at_points,
+            generate_background_points,
+        )
+
         if isinstance(raster_stack, list):
             raster_stack = RasterStack.from_files(raster_stack)
-        
-        # Extract site samples
-        site_collections = extract_at_points(
+
+        # Extract site samples as genuine multi-pixel distributions (neighbouring
+        # cells), not a single repeated pixel. site_buffer is retained for API
+        # compatibility but no longer needed to avoid degenerate bags.
+        site_collections = extract_distribution_at_points(
             raster_stack,
             sites,
-            buffer_radius=site_buffer,
             n_samples=samples_per_location,
-            random_seed=self.seed
+            label=1,
+            random_seed=self.seed,
         )
-        for coll in site_collections:
-            coll.label = 1
         
         # Generate exclusion geometries if buffer specified
         exclusion_geoms = None
@@ -157,18 +171,36 @@ class KLRfome:
             random_seed=self.seed
         )
         
-        # Extract background samples
-        background_collections = extract_at_points(
+        # Extract background samples as genuine multi-pixel distributions.
+        background_collections = extract_distribution_at_points(
             raster_stack,
             background_points,
             n_samples=samples_per_location,
-            random_seed=self.seed
+            label=0,
+            random_seed=self.seed,
         )
-        for coll in background_collections:
-            coll.label = 0
         
+        collections = site_collections + background_collections
+
+        # Z-score covariates using global training statistics. This mirrors R's
+        # format_site_data, which scales every variable before kernel construction.
+        # The same statistics are reused to scale prediction rasters in predict(),
+        # so the kernel bandwidth (sigma) operates on a consistent, normalized scale.
+        if self.scale_features and len(collections) > 0:
+            import numpy as np
+            all_samples = np.concatenate(
+                [np.asarray(c.samples) for c in collections], axis=0
+            )
+            mean = all_samples.mean(axis=0)
+            std = all_samples.std(axis=0)
+            std = np.where(std < 1e-12, 1.0, std)
+            self._feature_means = jnp.asarray(mean)
+            self._feature_stds = jnp.asarray(std)
+            for c in collections:
+                c.samples = jnp.asarray((np.asarray(c.samples) - mean) / std)
+
         return TrainingData(
-            collections=site_collections + background_collections,
+            collections=collections,
             feature_names=raster_stack.band_names,
             crs=raster_stack.crs
         )
@@ -184,12 +216,32 @@ class KLRfome:
             self (for method chaining)
         """
         self._training_data = training_data
-        
+
+        # Calibrate the kernel bandwidth to the data. The default sigma is tuned
+        # for a handful of features and saturates the kernel to ~0 in higher
+        # dimensions, which makes predictions no better than random. The median
+        # pairwise-distance heuristic keeps the kernel in its informative range.
+        if self.auto_sigma and len(training_data.collections) > 1:
+            if self.kernel_type == 'wasserstein':
+                sw = SlicedWassersteinDistance(
+                    n_projections=self.n_projections, p=self.wasserstein_p, seed=self.seed
+                )
+                dists = sw.pairwise_distances(training_data.collections)
+                self.sigma = float(estimate_sigma_from_distances(dists, 50.0))
+            else:
+                from .data.tabular import median_sigma
+                self.sigma = float(median_sigma(training_data.collections, seed=self.seed))
+            # Rebuild the kernel(s) with the calibrated sigma.
+            self.__post_init__()
+
         # Build similarity matrix
         if self.kernel_type == 'wasserstein':
             # Wasserstein kernel
             self._similarity_matrix = self._distribution_kernel.build_similarity_matrix(
-                training_data.collections
+                training_data.collections,
+                bucket_width=self.bucket_width,
+                bucket_ceil=self.bucket_ceil,
+                bucket_cap=self.bucket_cap,
             )
         else:
             # Mean embedding kernel
@@ -241,7 +293,22 @@ class KLRfome:
         
         if isinstance(raster_stack, list):
             raster_stack = RasterStack.from_files(raster_stack)
-        
+
+        # Apply the SAME z-scoring used on the training covariates so the kernel
+        # bandwidth operates on a comparable scale (matches R scale_prediction_rasters).
+        if self.scale_features and self._feature_means is not None:
+            import numpy as np
+            data = np.asarray(raster_stack.data)
+            mean = np.asarray(self._feature_means).reshape(-1, 1, 1)
+            std = np.asarray(self._feature_stds).reshape(-1, 1, 1)
+            raster_stack = RasterStack(
+                data=jnp.asarray((data - mean) / std),
+                transform=raster_stack.transform,
+                crs=raster_stack.crs,
+                band_names=raster_stack.band_names,
+                nodata=raster_stack.nodata,
+            )
+
         # Use appropriate predictor based on kernel type
         if self.kernel_type == 'wasserstein':
             predictor = WassersteinFocalPredictor(

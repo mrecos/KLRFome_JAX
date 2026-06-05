@@ -196,5 +196,90 @@ def generate_background_points(
     
     # Create GeoDataFrame
     gdf = gpd.GeoDataFrame(geometry=points, crs=raster_stack.crs)
-    
+
     return gdf
+
+
+def extract_distribution_at_points(
+    raster_stack: RasterStack,
+    points: 'geopandas.GeoDataFrame',  # type: ignore
+    n_samples: int = 20,
+    label: int = 1,
+    random_seed: Optional[int] = None,
+) -> List[SampleCollection]:
+    """
+    Extract a genuine multi-pixel distribution around each location.
+
+    For each point we take the *distinct* neighbouring raster cells, expanding a
+    square window around the centre pixel until at least ``n_samples`` valid cells
+    are available (or the raster edge is reached), then draw ``n_samples`` of them.
+    This avoids the degenerate "same pixel repeated N times" bags produced by
+    random sub-pixel sampling of a zero-area point, so each bag has non-trivial
+    within-bag variance and the mean-embedding / Wasserstein kernels actually see
+    a distribution. It also makes training bags the same kind of object as the
+    focal windows used at prediction time.
+
+    Parameters:
+        raster_stack: RasterStack to extract from
+        points: GeoDataFrame of point (or polygon) geometries
+        n_samples: Number of samples per location (bag size)
+        label: Label to assign to every produced collection (1 site, 0 background)
+        random_seed: Seed for the cell draw
+
+    Returns:
+        List of SampleCollection, one per location with a usable neighbourhood.
+    """
+    import rasterio
+
+    if random_seed is not None:
+        np.random.seed(random_seed)
+
+    data = np.asarray(raster_stack.data)
+    n_bands, height, width = data.shape
+    nodata = raster_stack.nodata
+
+    collections: List[SampleCollection] = []
+
+    for idx, row in points.iterrows():
+        geom = row.geometry
+        if geom.geom_type == 'Point':
+            x, y = geom.x, geom.y
+        else:
+            x, y = geom.centroid.x, geom.centroid.y
+
+        r, c = rasterio.transform.rowcol(raster_stack.transform, x, y)
+        r = int(np.clip(r, 0, height - 1))
+        c = int(np.clip(c, 0, width - 1))
+
+        # Grow the neighbourhood until we have enough valid (non-nodata) cells.
+        radius = 1
+        cells = np.empty((0, n_bands))
+        while True:
+            r0, r1 = max(0, r - radius), min(height, r + radius + 1)
+            c0, c1 = max(0, c - radius), min(width, c + radius + 1)
+            block = data[:, r0:r1, c0:c1].reshape(n_bands, -1).T  # (k, n_bands)
+            if nodata is not None:
+                block = block[~np.any(block == nodata, axis=1)]
+            cells = block
+            at_edge = (r0 == 0 and c0 == 0 and r1 == height and c1 == width)
+            if cells.shape[0] >= n_samples or at_edge:
+                break
+            radius += 1
+
+        if cells.shape[0] == 0:
+            continue
+
+        replace = cells.shape[0] < n_samples
+        sel = np.random.choice(cells.shape[0], size=n_samples, replace=replace)
+        samples = cells[sel]
+
+        collections.append(
+            SampleCollection(
+                samples=jnp.asarray(samples),
+                label=label,
+                id=f"location_{idx}",
+                metadata={"row": r, "col": c},
+            )
+        )
+
+    return collections

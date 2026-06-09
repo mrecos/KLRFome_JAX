@@ -286,42 +286,32 @@ def cross_validate(
     n = len(training_data.collections)
     fold_size = n // n_folds
     
+    # Folds are lists of INDICES in both branches. Never compare SampleCollections by
+    # value: their `samples` field is a JAX array, so `coll in [...]` / `==` triggers
+    # element-wise array equality and then `bool(array)` -> ValueError.
     if stratified:
-        # Separate sites and background
-        sites = [c for c in training_data.collections if c.label == 1]
-        background = [c for c in training_data.collections if c.label == 0]
-        
-        random.shuffle(sites)
-        random.shuffle(background)
-        
-        # Create folds
+        site_idx = [i for i, c in enumerate(training_data.collections) if c.label == 1]
+        bg_idx = [i for i, c in enumerate(training_data.collections) if c.label == 0]
+        random.shuffle(site_idx)
+        random.shuffle(bg_idx)
         folds = []
         for i in range(n_folds):
-            fold_sites = sites[i * len(sites) // n_folds:(i + 1) * len(sites) // n_folds]
-            fold_bg = background[i * len(background) // n_folds:(i + 1) * len(background) // n_folds]
-            folds.append(fold_sites + fold_bg)
+            fold = (site_idx[i * len(site_idx) // n_folds:(i + 1) * len(site_idx) // n_folds]
+                    + bg_idx[i * len(bg_idx) // n_folds:(i + 1) * len(bg_idx) // n_folds])
+            folds.append(fold)
     else:
-        # Simple random split
         indices = list(range(n))
         random.shuffle(indices)
         folds = [indices[i * fold_size:(i + 1) * fold_size] for i in range(n_folds)]
-    
+
     fold_results = []
-    
+
     for fold_idx in range(n_folds):
-        # Split into train and test
-        if stratified:
-            test_collections = folds[fold_idx]
-            train_collections = []
-            for i, coll in enumerate(training_data.collections):
-                if coll not in test_collections:
-                    train_collections.append(coll)
-        else:
-            test_indices = folds[fold_idx]
-            train_indices = [i for i in range(n) if i not in test_indices]
-            
-            train_collections = [training_data.collections[i] for i in train_indices]
-            test_collections = [training_data.collections[i] for i in test_indices]
+        # Split into train/test by index (stratified and non-stratified alike).
+        test_index_set = set(folds[fold_idx])
+        train_collections = [c for i, c in enumerate(training_data.collections)
+                             if i not in test_index_set]
+        test_collections = [training_data.collections[i] for i in folds[fold_idx]]
         
         train_data = TrainingData(
             collections=train_collections,

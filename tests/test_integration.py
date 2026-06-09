@@ -135,8 +135,54 @@ def test_klrfome_fit_and_predict_workflow():
     # Fit and predict
     model = KLRfome(sigma=1.0, lambda_reg=0.1, n_rff_features=64, window_size=3)
     model.fit(training_data)
-    
+
     predictions = model.predict(raster_stack, show_progress=False)
-    
+
     assert predictions.shape == (10, 10)
+
+
+@pytest.mark.parametrize("stratified", [True, False])
+def test_cross_validate_multifeature(stratified):
+    """Regression: cross_validate must work on multi-feature data.
+
+    SampleCollection.samples is a JAX array; the stratified path previously did
+    `coll not in test_collections`, raising
+    'truth value of an array with more than one element is ambiguous'.
+    cross_validate defaults to stratified=True and was untested.
+    """
+    from klrfome.utils.validation import cross_validate
+
+    collections = []
+    for i in range(6):
+        s = random.normal(random.PRNGKey(i), (12, 4)) + 1.0
+        collections.append(SampleCollection(samples=s, label=1, id=f"site_{i}"))
+    for i in range(6):
+        s = random.normal(random.PRNGKey(100 + i), (12, 4)) - 1.0
+        collections.append(SampleCollection(samples=s, label=0, id=f"bg_{i}"))
+    training_data = TrainingData(
+        collections=collections, feature_names=[f"v{j}" for j in range(4)]
+    )
+
+    model = KLRfome(lambda_reg=0.1, n_rff_features=64, seed=0)
+    results = cross_validate(model, training_data, n_folds=3, stratified=stratified, seed=0)
+
+    assert results["n_folds"] == 3
+    assert len(results["folds"]) == 3
+    assert "aggregated_metrics" in results
+    for fold in results["folds"]:
+        assert fold["n_train"] > 0 and fold["n_test"] > 0
+    # folds partition the data: every collection is tested exactly once
+    assert sum(f["n_test"] for f in results["folds"]) == len(collections)
+
+
+def test_cross_validate_public_method_default_stratified():
+    """The exact reported entry point: model.cross_validate(data) (stratified=True)."""
+    collections = (
+        [SampleCollection(random.normal(random.PRNGKey(i), (10, 3)) + 1.0, 1, f"s{i}") for i in range(4)]
+        + [SampleCollection(random.normal(random.PRNGKey(50 + i), (10, 3)) - 1.0, 0, f"b{i}") for i in range(4)]
+    )
+    training_data = TrainingData(collections=collections, feature_names=["a", "b", "c"])
+    model = KLRfome(lambda_reg=0.1, n_rff_features=64, seed=0)
+    results = model.cross_validate(training_data, n_folds=2)  # stratified=True by default
+    assert len(results["folds"]) == 2
 

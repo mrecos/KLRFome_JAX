@@ -428,6 +428,83 @@ def permutation_importance(model: dict, test_bags, feature_names, n_repeats: int
     return float(base), imp
 
 
+# ---------------------------------------------------------------------------
+# Prospection-appropriate (presence-only) evaluation.
+#
+# This is presence/background (positive-unlabeled), not binary classification:
+# "background" is unlabeled, not true absence, and the sampled prevalence is not
+# the landscape base rate. So specificity / precision / accuracy / Youden's J are
+# biased and should NOT drive the operating point. Instead choose the threshold by
+# AREA budget and judge the model by how efficiently it concentrates sites (gain /
+# lift) and by the presence-only Continuous Boyce Index.
+# ---------------------------------------------------------------------------
+def threshold_for_area(landscape_probs, area_fraction: float) -> float:
+    """Probability cutoff that flags the top ``area_fraction`` of the landscape."""
+    p = np.asarray(landscape_probs)
+    a = float(np.clip(area_fraction, 1e-9, 1.0))
+    return float(np.quantile(p, 1.0 - a))
+
+
+def capture_gain_table(landscape_probs, target_probs,
+                       area_fractions=(0.05, 0.10, 0.20, 0.30)):
+    """Operating points by AREA budget (the prospection-appropriate view).
+
+    landscape_probs : predicted P over all landscape cells (defines the cutoff).
+    target_probs    : predicted P at the target sites (ideally HELD-OUT) we want to
+                      capture; capture = sensitivity at each area budget.
+
+    Returns a list of dicts with: area, threshold, capture, gain, lift.
+      gain = Kvamme's gain = 1 - area/capture   (0 = random, ->1 = efficient)
+      lift = capture/area                        (enrichment over random)
+    """
+    land = np.asarray(landscape_probs)
+    tgt = np.asarray(target_probs)
+    rows = []
+    for a in area_fractions:
+        thr = threshold_for_area(land, a)
+        capture = float((tgt >= thr).mean()) if len(tgt) else float("nan")
+        gain = (1.0 - a / capture) if capture > 0 else float("nan")
+        lift = (capture / a) if a > 0 else float("nan")
+        rows.append({"area": float(a), "threshold": thr,
+                     "capture": capture, "gain": gain, "lift": lift})
+    return rows
+
+
+def continuous_boyce_index(presence_probs, background_probs, n_windows: int = 20, window: float = 0.1):
+    """Continuous Boyce Index (Hirzel et al. 2006) — presence-only model evaluation.
+
+    Needs only presences and the background (available) distribution; no true
+    absences. Moving windows across the suitability range; per window compute the
+    predicted-to-expected ratio F = (presence fraction)/(area fraction); CBI is the
+    Spearman correlation between F and window suitability.
+
+    Range [-1, 1]: >0 good (sites concentrate at high suitability), ~0 random,
+    <0 counter-predictive. Returns (cbi, window_midpoints, F_values).
+    """
+    from scipy.stats import spearmanr
+
+    pres = np.asarray(presence_probs)
+    bg = np.asarray(background_probs)
+    lo = float(min(pres.min(), bg.min()))
+    hi = float(max(pres.max(), bg.max()))
+    if hi <= lo:
+        return float("nan"), np.array([]), np.array([])
+    w = window * (hi - lo)
+    starts = np.linspace(lo, hi - w, n_windows)
+    mids, F = [], []
+    for s in starts:
+        e = s + w
+        Pi = float(((pres >= s) & (pres < e)).mean())
+        Ei = float(((bg >= s) & (bg < e)).mean())
+        if Ei > 0:
+            mids.append((s + e) / 2.0)
+            F.append(Pi / Ei)
+    if len(F) < 3:
+        return float("nan"), np.array(mids), np.array(F)
+    cbi = float(spearmanr(mids, F).correlation)
+    return cbi, np.array(mids), np.array(F)
+
+
 def median_sigma(
     collections: List[SampleCollection],
     n_cells: int = 1000,

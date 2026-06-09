@@ -360,9 +360,30 @@ valid only within the region the *background* was sampled from. If background co
 only part of the study area, clip sites to that footprint explicitly with
 `restrict_to_background_domain(df)` rather than silently scoring out-of-domain sites.
 
+**Evaluate it as presence-only, not binary classification.** "Background" is
+*unlabeled*, not true absence — and for prospection the undiscovered sites you are
+hunting for live inside it (a high-probability cell with no known site is the
+*product*, not an error). The sampled prevalence is also not the landscape base rate.
+So **specificity, precision, accuracy, and balanced sens/spec (Youden's J) are biased
+and should not set the decision threshold.** Instead:
+
+- judge discrimination with the presence-only **Continuous Boyce Index**
+  (`continuous_boyce_index`); AUC is a secondary, conservative summary;
+- choose an operating point by **area budget** — designate the top *X%* of the
+  landscape (`threshold_for_area`) and report capture, **Kvamme's gain**, and **lift**
+  (`capture_gain_table`).
+
+```python
+from klrfome.data.tabular import continuous_boyce_index, capture_gain_table
+cbi, mids, F = continuous_boyce_index(holdout_site_probs, landscape_probs)
+table = capture_gain_table(landscape_probs, holdout_site_probs, area_fractions=(0.05, 0.1, 0.2))
+# e.g. "top 5% of area -> captures 29% of held-out sites, ~6x random density (lift)"
+```
+
 An end-to-end, annotated walkthrough — bag construction, sigma calibration, both
-kernels, confusion matrix at the optimal threshold, gain/capture curve, calibration
-curve, permutation importance, and a prediction-probability map — is in
+kernels, the prediction-probability surface, the Boyce index, area-budget
+capture/gain/lift, calibration, permutation importance, a recall map, and (demoted and
+clearly labelled *biased*) a confusion matrix — is in
 **`notebooks/04_real_data_validation.ipynb`**.
 
 ---

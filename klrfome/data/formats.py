@@ -7,10 +7,15 @@ from jaxtyping import Array, Float
 import numpy as np
 
 
-@dataclass
+@dataclass(eq=False)
 class SampleCollection:
     """
     Represents samples from a single site or background location.
+
+    ``eq=False`` (identity equality): the ``samples`` field is a JAX array, so
+    value-based ``==`` / ``in`` would do element-wise comparison and raise
+    ``ValueError: truth value of an array ... is ambiguous``. Identity equality
+    avoids that footgun and also makes these objects hashable.
     
     Attributes:
         samples: Array of shape (n_samples, n_features)

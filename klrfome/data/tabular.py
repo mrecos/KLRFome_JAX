@@ -202,17 +202,43 @@ def labels_of(collections: List[SampleCollection]) -> np.ndarray:
     return np.array([c.label for c in collections])
 
 
+def _sq_dists(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """Pairwise squared Euclidean distances ||a-b||^2 between rows of A and B."""
+    a2 = (A ** 2).sum(1)[:, None]
+    b2 = (B ** 2).sum(1)[None, :]
+    return np.maximum(a2 + b2 - 2.0 * (A @ B.T), 0.0)
+
+
+def _median_embedding_sigma(E: np.ndarray) -> float:
+    """Median pairwise distance between mean embeddings (bandwidth for the RBF-on-embeddings kernel)."""
+    n = E.shape[0]
+    d2 = _sq_dists(E, E)
+    med = float(np.sqrt(np.median(d2[np.triu_indices(n, 1)])))
+    return med if med > 1e-12 else 1.0
+
+
 def fit_mean_embedding(
     train: List[SampleCollection],
     sigma: float,
+    embedding_kernel: str = "linear",
+    embedding_sigma: Optional[float] = None,
     n_features: int = 256,
     lambda_reg: float = 0.1,
     seed: int = 42,
 ) -> dict:
-    """Fit a mean-embedding (RFF) KLR and return a reusable fitted model dict.
+    """Fit a mean-embedding KLR and return a reusable fitted model dict.
 
-    Returns {'rff', 'Etr' (n_train x D train embeddings), 'alpha', 'sigma'} so the
-    same model can score held-out bags AND a prediction surface without refitting.
+    ``embedding_kernel`` selects the DISTRIBUTION-level kernel on the mean embeddings:
+      - ``"linear"`` (default): K = <mu_X, mu_Y>. KLR then collapses to *logistic
+        regression in feature space* -- linear in the embedding, the only nonlinearity
+        being the fixed point-level RBF. Fast and interpretable.
+      - ``"rbf"``: K = exp(-||mu_X - mu_Y||^2 / 2 embedding_sigma^2). Genuinely nonlinear
+        in distribution space -- the capacity-matched counterpart to the Wasserstein RBF,
+        so the two can be compared fairly (same kind of model, different geometry).
+        Introduces a second bandwidth ``embedding_sigma`` (median-calibrated if None).
+
+    Returns a dict with rff, Etr (train embeddings), alpha, sigma, embedding_kernel,
+    embedding_sigma -- reusable to score held-out bags or a prediction surface.
     """
     from ..kernels.rff import RandomFourierFeatures
     from ..models.klr import KernelLogisticRegression
@@ -222,9 +248,19 @@ def fit_mean_embedding(
     e_tr = np.stack([
         np.asarray(jnp.mean(rff.feature_map(jnp.asarray(c.samples)), axis=0)) for c in train
     ])
+
+    if embedding_kernel == "rbf":
+        if embedding_sigma is None:
+            embedding_sigma = _median_embedding_sigma(e_tr)
+        k_tr = np.exp(-_sq_dists(e_tr, e_tr) / (2.0 * embedding_sigma ** 2))
+    else:
+        k_tr = e_tr @ e_tr.T
+
     klr = KernelLogisticRegression(lambda_reg=lambda_reg, tol=0.001)
-    fit = klr.fit(jnp.asarray(e_tr @ e_tr.T), jnp.asarray(labels_of(train)))
-    return {"rff": rff, "Etr": e_tr, "alpha": np.asarray(fit.alpha), "sigma": float(sigma)}
+    fit = klr.fit(jnp.asarray(k_tr), jnp.asarray(labels_of(train)))
+    return {"rff": rff, "Etr": e_tr, "alpha": np.asarray(fit.alpha), "sigma": float(sigma),
+            "embedding_kernel": embedding_kernel,
+            "embedding_sigma": (float(embedding_sigma) if embedding_sigma is not None else None)}
 
 
 def mean_embedding_predict(model: dict, bags: List[SampleCollection]) -> np.ndarray:
@@ -232,6 +268,9 @@ def mean_embedding_predict(model: dict, bags: List[SampleCollection]) -> np.ndar
     e = np.stack([
         np.asarray(jnp.mean(model["rff"].feature_map(jnp.asarray(c.samples)), axis=0)) for c in bags
     ])
+    if model.get("embedding_kernel") == "rbf":
+        k = np.exp(-_sq_dists(e, model["Etr"]) / (2.0 * model["embedding_sigma"] ** 2))
+        return 1.0 / (1.0 + np.exp(-(k @ model["alpha"])))
     return 1.0 / (1.0 + np.exp(-((e @ model["Etr"].T) @ model["alpha"])))
 
 
@@ -259,7 +298,8 @@ def predict_xy_surface(
 
     centers_xy = np.atleast_2d(np.asarray(centers_xy))
     tree = cKDTree(cells_xy)
-    proj = model["Etr"].T @ model["alpha"]           # (D,) collapse train side once
+    is_rbf = model.get("embedding_kernel") == "rbf"
+    proj = None if is_rbf else (model["Etr"].T @ model["alpha"])  # (D,) linear collapse
     out = np.empty(centers_xy.shape[0])
     for start in range(0, centers_xy.shape[0], batch_size):
         chunk = centers_xy[start:start + batch_size]
@@ -269,7 +309,11 @@ def predict_xy_surface(
         b, kk, d = bags.shape
         phi = np.asarray(model["rff"].feature_map(jnp.asarray(bags.reshape(b * kk, d))))
         emb = phi.reshape(b, kk, -1).mean(axis=1)    # (b, D)
-        out[start:start + b] = 1.0 / (1.0 + np.exp(-(emb @ proj)))
+        if is_rbf:
+            kmat = np.exp(-_sq_dists(emb, model["Etr"]) / (2.0 * model["embedding_sigma"] ** 2))
+            out[start:start + b] = 1.0 / (1.0 + np.exp(-(kmat @ model["alpha"])))
+        else:
+            out[start:start + b] = 1.0 / (1.0 + np.exp(-(emb @ proj)))
     return out
 
 
@@ -533,34 +577,27 @@ def mean_embedding_heldout(
     train: List[SampleCollection],
     test: List[SampleCollection],
     sigma: float,
+    embedding_kernel: str = "linear",
+    embedding_sigma: Optional[float] = None,
     n_features: int = 256,
     lambda_reg: float = 0.1,
     seed: int = 42,
 ):
-    """Fit a mean-embedding (RFF) KLR on train bags, score held-out test bags.
+    """Fit a mean-embedding KLR on train bags, score held-out test bags.
 
-    Returns (auc, test_probabilities, test_labels). Vectorized and fast: each bag
-    is reduced to a single mean RFF embedding, so the kernel is E @ E.T.
+    ``embedding_kernel`` ("linear" or "rbf"): the distribution-level kernel on the mean
+    embeddings. "linear" is logistic regression in feature space; "rbf" is nonlinear in
+    distribution space (capacity-matched to the Wasserstein kernel). See
+    ``fit_mean_embedding``. Returns (auc, test_probabilities, test_labels).
     """
-    from ..kernels.rff import RandomFourierFeatures
-    from ..models.klr import KernelLogisticRegression
     from ..utils.validation import compute_roc_auc
 
-    rff = RandomFourierFeatures(sigma=sigma, n_features=n_features, seed=seed)
-    rff._initialize_weights(int(train[0].samples.shape[1]))
-
-    def embed(bags):
-        return np.stack([
-            np.asarray(jnp.mean(rff.feature_map(jnp.asarray(c.samples)), axis=0))
-            for c in bags
-        ])
-
-    e_tr, e_te = embed(train), embed(test)
-    y_tr = labels_of(train); y_te = labels_of(test)
-    klr = KernelLogisticRegression(lambda_reg=lambda_reg, tol=0.001)
-    fit = klr.fit(jnp.asarray(e_tr @ e_tr.T), jnp.asarray(y_tr))
-    alpha = np.asarray(fit.alpha)
-    probs = 1.0 / (1.0 + np.exp(-((e_te @ e_tr.T) @ alpha)))
+    model = fit_mean_embedding(
+        train, sigma, embedding_kernel=embedding_kernel, embedding_sigma=embedding_sigma,
+        n_features=n_features, lambda_reg=lambda_reg, seed=seed,
+    )
+    probs = mean_embedding_predict(model, test)
+    y_te = labels_of(test)
     return compute_roc_auc(probs, y_te), probs, y_te
 
 

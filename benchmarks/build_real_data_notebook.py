@@ -1,7 +1,10 @@
 """Generate notebooks/04_real_data_validation.ipynb (kept thin: logic lives in
 klrfome.data.tabular). Run: python benchmarks/_build_nb.py"""
 import json
+from datetime import datetime
 from pathlib import Path
+
+BUILD_TS = datetime.now().strftime("%Y-%m-%d %H:%M")
 
 def md(*lines): return {"cell_type": "markdown", "metadata": {}, "source": [l + "\n" for l in lines]}
 def code(*lines): return {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [], "source": [l + "\n" for l in lines]}
@@ -262,6 +265,28 @@ md("## 16. Summary",
    "",
    "Still to add later: spatial-CV / leave-site-out error bars; partial-response curves;",
    "true-prevalence calibration once a base-rate estimate exists."),
+md("## 17. Kernel capacity comparison: linear vs RBF mean-embedding vs Wasserstein",
+   "The **linear** mean-embedding kernel makes KLR a *linear* model in feature space",
+   "(logistic regression on the embedding) -- all nonlinearity is the fixed point-level",
+   "RBF. The **RBF-on-embeddings** kernel `exp(-||mu_X - mu_Y||^2 / 2s^2)` is nonlinear in",
+   "distribution space, the capacity-matched counterpart to the Wasserstein RBF. So:",
+   "**linear vs RBF mean-embedding** isolates *model capacity*; **RBF mean-embedding vs",
+   "Wasserstein** isolates the *distribution geometry* (MMD-Euclidean vs sliced-Wasserstein)."),
+code("auc_lin, _, _    = mean_embedding_heldout(train_s, test_s, sigma=best_sigma, embedding_kernel='linear', seed=SEED)",
+     "auc_rbf, _, _    = mean_embedding_heldout(train_s, test_s, sigma=best_sigma, embedding_kernel='rbf', seed=SEED)",
+     "auc_w, _, _, sw  = wasserstein_heldout(train_s, test_s, sigma=None, n_projections=100, p=2, seed=SEED)",
+     "print(f'mean-embedding  LINEAR : held-out AUC = {auc_lin:.3f}   (logistic regression in feature space)')",
+     "print(f'mean-embedding  RBF    : held-out AUC = {auc_rbf:.3f}   (nonlinear in distribution space)')",
+     "print(f'Wasserstein     RBF    : held-out AUC = {auc_w:.3f}   (sigma={sw:.3f})')",
+     "plt.figure(figsize=(5, 3))",
+     "plt.bar(['ME linear', 'ME rbf', 'Wasserstein'], [auc_lin, auc_rbf, auc_w],",
+     "        color=['steelblue', 'seagreen', 'indianred'])",
+     "plt.axhline(0.5, color='k', ls=':', label='random'); plt.ylim(0, 1)",
+     "plt.ylabel('held-out AUC'); plt.title('Capacity (linear vs rbf) & geometry (rbf vs Wasserstein)')",
+     "plt.legend(); plt.show()"),
+md("---",
+   "",
+   f"*KLRfome-JAX — real-data validation notebook · last updated: {BUILD_TS}*"),
 ]
 
 nb = {"cells": cells,

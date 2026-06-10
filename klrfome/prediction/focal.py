@@ -11,6 +11,7 @@ from jaxtyping import Array, Float
 
 from ..kernels.distribution import MeanEmbeddingKernel
 from ..kernels.wasserstein import WassersteinKernel, _resample_sorted_projections
+from ..kernels.rff import _rff_feature_map
 from ..data.formats import TrainingData, RasterStack, SampleCollection
 
 
@@ -255,11 +256,10 @@ class FocalPredictor:
             window_samples = window.reshape(window.shape[0], -1).T
             
             # Compute prediction
-            if use_rff and training_embeddings is not None and rff_W is not None and rff_b is not None and rff_n_features is not None:
-                # RFF path: compute mean embedding and dot with training embeddings
-                # Project: Wx + b
-                projection = jnp.dot(window_samples, rff_W) + rff_b
-                phi = jnp.sqrt(2.0 / rff_n_features) * jnp.cos(projection)
+            if use_rff and training_embeddings is not None and rff_W is not None:
+                # RFF path: phase-free sin/cos features, identical to
+                # RandomFourierFeatures.feature_map (rff_b/rff_n_features now unused).
+                phi = _rff_feature_map(window_samples, rff_W)
                 window_embedding = jnp.mean(phi, axis=0)
                 K_new = jnp.dot(window_embedding, training_embeddings.T)
             else:

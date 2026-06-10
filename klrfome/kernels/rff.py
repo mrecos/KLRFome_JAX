@@ -8,22 +8,26 @@ from typing import Optional
 from jaxtyping import Array, Float
 
 
-@partial(jit, static_argnames=("n_features",))
+@jit
 def _rff_feature_map(
     X: Float[Array, "n d"],
-    W: Float[Array, "d D"],
-    b: Float[Array, "D"],
-    n_features: int,
+    W: Float[Array, "d m"],
 ) -> Float[Array, "n D"]:
-    """Core RFF map: phi(x) = sqrt(2/D) * cos(Wx + b).
+    """Core RFF map (phase-free sin/cos estimator):
 
-    W and b are explicit (traced) arguments rather than closed-over constants, so the
-    compiled function always uses the *current* weights. Jitting a method with a static
-    ``self`` instead would bake W/b in at first trace and never refresh them if they
-    change on the same object (same id -> cache hit -> stale weights).
+        phi(x) = sqrt(1/m) * [cos(Wx), sin(Wx)]    with m = W.shape[1] frequencies, D = 2m.
+
+    The phase-free sin/cos pair is unbiased for the RBF kernel and has strictly LOWER
+    variance than the random-offset ``sqrt(2/D) cos(Wx + b)`` estimator at the same
+    feature budget (Sutherland & Schneider, 2015) -- a free accuracy upgrade.
+
+    W is an explicit (traced) argument rather than a closed-over constant, so the
+    compiled function always uses the current weights (no stale-weight baking via a
+    static ``self``).
     """
-    projection = jnp.dot(X, W) + b
-    return jnp.sqrt(2.0 / n_features) * jnp.cos(projection)
+    proj = jnp.dot(X, W)  # (n, m)
+    m = W.shape[1]
+    return jnp.concatenate([jnp.cos(proj), jnp.sin(proj)], axis=1) * jnp.sqrt(1.0 / m)
 
 
 class RandomFourierFeatures:
@@ -31,18 +35,20 @@ class RandomFourierFeatures:
     Random Fourier Features approximation to RBF kernel.
     
     Approximates: k(x, y) ≈ φ(x)ᵀφ(y)
-    
-    Where φ(x) = sqrt(2/D) * cos(Wx + b)
-    
+
+    Where φ(x) = sqrt(1/m) * [cos(Wx), sin(Wx)]   (phase-free sin/cos estimator)
+
     This transforms the kernel computation from O(n²) to O(nD) where
-    D is the number of random features.
-    
+    D = 2 * n_features is the output dimension.
+
     Reference:
         Rahimi & Recht (2007). "Random Features for Large-Scale Kernel Machines"
-    
+        Sutherland & Schneider (2015). "On the Error of Random Fourier Features"
+
     Parameters:
         sigma: Bandwidth of the RBF kernel to approximate
-        n_features: Number of random features (D). Higher = better approximation.
+        n_features: Number of random FREQUENCIES m. Higher = better approximation.
+            The output dimension is D = 2 * n_features (cos and sin per frequency).
         seed: Random seed for reproducibility
     """
     
@@ -75,23 +81,24 @@ class RandomFourierFeatures:
         return self._n_features
     
     def _initialize_weights(self, input_dim: int):
-        """Initialize random weights for the feature map."""
+        """Initialize random frequencies for the (phase-free) feature map.
+
+        ``n_features`` is the number of random FREQUENCIES m (matching the
+        Rahimi-Recht / original-offset convention). The sin/cos estimator emits
+        two features -- cos and sin -- per frequency, so the OUTPUT dimension is
+        D = 2 * n_features. Keeping the frequency count equal to ``n_features``
+        (rather than n_features//2) preserves how finely the mean embedding
+        resolves a distribution, which matters for tail metrics like top-area
+        lift even though it does not move AUC.
+        """
         if self._W is not None and self._input_dim == input_dim:
             return
-        
+
         key = random.PRNGKey(self._seed)
-        key_W, key_b = random.split(key)
-        
-        # W ~ N(0, 1/σ²) for RBF kernel
-        # For RBF, we need W ~ N(0, I/σ²) where I is identity
-        self._W = random.normal(key_W, (input_dim, self._n_features)) / self._sigma
-        # b ~ Uniform(0, 2π)
-        self._b = random.uniform(
-            key_b, 
-            (self._n_features,), 
-            minval=0, 
-            maxval=2 * jnp.pi
-        )
+        m = self._n_features  # number of frequencies; output dim D = 2 * m
+        # w ~ N(0, I/sigma^2): the spectral density of the RBF kernel.
+        self._W = random.normal(key, (input_dim, m)) / self._sigma
+        self._b = None  # no random offset in the sin/cos estimator
         self._input_dim = input_dim
     
     def feature_map(
@@ -101,22 +108,22 @@ class RandomFourierFeatures:
         """
         Compute random Fourier features.
 
-        φ(x) = sqrt(2/D) * cos(Wx + b)
+        φ(x) = sqrt(1/m) * [cos(Wx), sin(Wx)]
 
         Parameters:
             X: Input points, shape (n, d)
 
         Returns:
-            Feature map of shape (n, D)
+            Feature map of shape (n, D) with D = 2 * n_features
         """
         if self._W is None or self._input_dim != X.shape[1]:
             raise RuntimeError(
                 "Weights not initialized. Call _initialize_weights() first, "
                 "or use __call__ which handles initialization."
             )
-        # Delegate to the module-level jitted core so the current W/b are always
-        # used (see _rff_feature_map): no stale-weight baking via a static self.
-        return _rff_feature_map(X, self._W, self._b, self._n_features)
+        # Delegate to the module-level jitted core (phase-free sin/cos estimator) so
+        # the current weights are always used: no stale-weight baking via a static self.
+        return _rff_feature_map(X, self._W)
     
     def __call__(
         self, 

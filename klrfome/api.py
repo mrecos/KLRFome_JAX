@@ -72,7 +72,8 @@ class KLRfome:
     n_rff_features: int = 256  # Use RFF approximation by default (faster)
     n_projections: int = 100  # For Wasserstein kernel
     wasserstein_p: Literal[1, 2] = 2  # Order of Wasserstein distance
-    bucket_width: Optional[int] = None  # For Wasserstein bucketing
+    n_quantiles: int = 128  # For Wasserstein: single global-Q quantile representation (fit AND predict)
+    bucket_width: Optional[int] = None  # For Wasserstein bucketing (legacy; superseded by n_quantiles)
     bucket_ceil: bool = True  # For Wasserstein bucketing
     bucket_cap: Optional[int] = None  # For Wasserstein bucketing
     window_size: int = 3
@@ -226,7 +227,8 @@ class KLRfome:
                 sw = SlicedWassersteinDistance(
                     n_projections=self.n_projections, p=self.wasserstein_p, seed=self.seed
                 )
-                dists = sw.pairwise_distances(training_data.collections)
+                # Calibrate on the SAME Q-quantile distances the kernel is built from.
+                dists = sw.pairwise_distances_quantile(training_data.collections, self.n_quantiles)
                 self.sigma = float(estimate_sigma_from_distances(dists, 50.0))
             else:
                 from .data.tabular import median_sigma
@@ -236,12 +238,12 @@ class KLRfome:
 
         # Build similarity matrix
         if self.kernel_type == 'wasserstein':
-            # Wasserstein kernel
+            # Wasserstein kernel via the single global-Q quantile representation, so the
+            # fitted kernel matches what the focal predictor uses (consistent for
+            # variable-size bags; see WassersteinFocalPredictor).
             self._similarity_matrix = self._distribution_kernel.build_similarity_matrix(
                 training_data.collections,
-                bucket_width=self.bucket_width,
-                bucket_ceil=self.bucket_ceil,
-                bucket_cap=self.bucket_cap,
+                n_quantiles=self.n_quantiles,
             )
         else:
             # Mean embedding kernel
@@ -315,7 +317,8 @@ class KLRfome:
                 wasserstein_kernel=self._distribution_kernel,
                 training_collections=self._training_data.collections,
                 klr_alpha=self._fit_result.alpha,
-                window_size=self.window_size
+                window_size=self.window_size,
+                n_quantiles=self.n_quantiles,
             )
         else:
             predictor = FocalPredictor(

@@ -8,6 +8,24 @@ from typing import Optional
 from jaxtyping import Array, Float
 
 
+@partial(jit, static_argnames=("n_features",))
+def _rff_feature_map(
+    X: Float[Array, "n d"],
+    W: Float[Array, "d D"],
+    b: Float[Array, "D"],
+    n_features: int,
+) -> Float[Array, "n D"]:
+    """Core RFF map: phi(x) = sqrt(2/D) * cos(Wx + b).
+
+    W and b are explicit (traced) arguments rather than closed-over constants, so the
+    compiled function always uses the *current* weights. Jitting a method with a static
+    ``self`` instead would bake W/b in at first trace and never refresh them if they
+    change on the same object (same id -> cache hit -> stale weights).
+    """
+    projection = jnp.dot(X, W) + b
+    return jnp.sqrt(2.0 / n_features) * jnp.cos(projection)
+
+
 class RandomFourierFeatures:
     """
     Random Fourier Features approximation to RBF kernel.
@@ -76,35 +94,29 @@ class RandomFourierFeatures:
         )
         self._input_dim = input_dim
     
-    @partial(jit, static_argnums=(0,))
     def feature_map(
-        self, 
+        self,
         X: Float[Array, "n d"]
     ) -> Float[Array, "n D"]:
         """
         Compute random Fourier features.
-        
+
         φ(x) = sqrt(2/D) * cos(Wx + b)
-        
+
         Parameters:
             X: Input points, shape (n, d)
-        
+
         Returns:
             Feature map of shape (n, D)
         """
         if self._W is None or self._input_dim != X.shape[1]:
-            # This will fail in JIT, so we initialize before JIT
-            # In practice, call _initialize_weights first
             raise RuntimeError(
                 "Weights not initialized. Call _initialize_weights() first, "
                 "or use __call__ which handles initialization."
             )
-        
-        # Project: Wx + b
-        projection = jnp.dot(X, self._W) + self._b  # (n, D)
-        
-        # Apply cosine and scale
-        return jnp.sqrt(2.0 / self._n_features) * jnp.cos(projection)
+        # Delegate to the module-level jitted core so the current W/b are always
+        # used (see _rff_feature_map): no stale-weight baking via a static self.
+        return _rff_feature_map(X, self._W, self._b, self._n_features)
     
     def __call__(
         self, 

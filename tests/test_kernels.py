@@ -103,10 +103,23 @@ def test_distribution_kernel_rff_path(sample_collections):
     """Distribution kernel with RFF should work."""
     rff = RandomFourierFeatures(sigma=1.0, n_features=128, seed=42)
     kernel = MeanEmbeddingKernel(rff)
-    
+
     K = kernel.build_similarity_matrix(sample_collections)
-    
+
     n = len(sample_collections)
     assert K.shape == (n, n)
     assert jnp.allclose(K, K.T)  # Symmetric
+
+
+def test_rff_feature_map_uses_current_weights():
+    """Regression: RFF feature_map must reflect the CURRENT weights, not bake stale
+    ones via a jitted static `self`. Mutating W on the same object (same id, same X
+    shape) must change the output (a stale jitted-static-self cache would not)."""
+    rff = RandomFourierFeatures(sigma=1.0, n_features=32, seed=0)
+    rff._initialize_weights(3)
+    X = random.normal(random.PRNGKey(1), (5, 3))
+    f1 = rff.feature_map(X)
+    rff._W = rff._W * 2.0
+    f2 = rff.feature_map(X)
+    assert not jnp.allclose(f1, f2)
 

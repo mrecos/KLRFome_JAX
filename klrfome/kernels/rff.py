@@ -35,18 +35,20 @@ class RandomFourierFeatures:
     Random Fourier Features approximation to RBF kernel.
     
     Approximates: k(x, y) ≈ φ(x)ᵀφ(y)
-    
-    Where φ(x) = sqrt(2/D) * cos(Wx + b)
-    
+
+    Where φ(x) = sqrt(1/m) * [cos(Wx), sin(Wx)]   (phase-free sin/cos estimator)
+
     This transforms the kernel computation from O(n²) to O(nD) where
-    D is the number of random features.
-    
+    D = 2 * n_features is the output dimension.
+
     Reference:
         Rahimi & Recht (2007). "Random Features for Large-Scale Kernel Machines"
-    
+        Sutherland & Schneider (2015). "On the Error of Random Fourier Features"
+
     Parameters:
         sigma: Bandwidth of the RBF kernel to approximate
-        n_features: Number of random features (D). Higher = better approximation.
+        n_features: Number of random FREQUENCIES m. Higher = better approximation.
+            The output dimension is D = 2 * n_features (cos and sin per frequency).
         seed: Random seed for reproducibility
     """
     
@@ -81,14 +83,19 @@ class RandomFourierFeatures:
     def _initialize_weights(self, input_dim: int):
         """Initialize random frequencies for the (phase-free) feature map.
 
-        ``n_features`` is the output dimension D; the sin/cos estimator uses
-        m = D // 2 frequencies (two features -- cos and sin -- per frequency).
+        ``n_features`` is the number of random FREQUENCIES m (matching the
+        Rahimi-Recht / original-offset convention). The sin/cos estimator emits
+        two features -- cos and sin -- per frequency, so the OUTPUT dimension is
+        D = 2 * n_features. Keeping the frequency count equal to ``n_features``
+        (rather than n_features//2) preserves how finely the mean embedding
+        resolves a distribution, which matters for tail metrics like top-area
+        lift even though it does not move AUC.
         """
         if self._W is not None and self._input_dim == input_dim:
             return
 
         key = random.PRNGKey(self._seed)
-        m = max(1, self._n_features // 2)
+        m = self._n_features  # number of frequencies; output dim D = 2 * m
         # w ~ N(0, I/sigma^2): the spectral density of the RBF kernel.
         self._W = random.normal(key, (input_dim, m)) / self._sigma
         self._b = None  # no random offset in the sin/cos estimator
@@ -101,13 +108,13 @@ class RandomFourierFeatures:
         """
         Compute random Fourier features.
 
-        φ(x) = sqrt(2/D) * cos(Wx + b)
+        φ(x) = sqrt(1/m) * [cos(Wx), sin(Wx)]
 
         Parameters:
             X: Input points, shape (n, d)
 
         Returns:
-            Feature map of shape (n, D)
+            Feature map of shape (n, D) with D = 2 * n_features
         """
         if self._W is None or self._input_dim != X.shape[1]:
             raise RuntimeError(

@@ -125,23 +125,24 @@ def test_rff_feature_map_uses_current_weights():
 
 
 def test_rff_sincos_estimator():
-    """Phase-free sin/cos RFF: output dim D = 2*(n_features//2), self-similarity is
-    EXACTLY 1 (cos^2+sin^2), and the kernel approximates the exact RBF."""
+    """Phase-free sin/cos RFF: n_features is the FREQUENCY count, output dim is
+    D = 2*n_features, self-similarity is EXACTLY 1 (cos^2+sin^2), and the kernel
+    approximates the exact RBF."""
     X = random.normal(random.PRNGKey(0), (8, 4))
-    rff = RandomFourierFeatures(sigma=1.0, n_features=2048, seed=1)
+    rff = RandomFourierFeatures(sigma=1.0, n_features=1024, seed=1)
     rff._initialize_weights(4)
     phi = rff.feature_map(X)
-    assert phi.shape == (8, 2048)              # even n_features -> exact D
+    assert phi.shape == (8, 2048)              # D = 2 * n_features
     K = phi @ phi.T
     # sin/cos gives exact self-similarity = 1 (offset cos(Wx+b) only does so in mean)
     assert jnp.allclose(jnp.diag(K), 1.0, atol=1e-6)
     exact = RBFKernel(sigma=1.0)(X, X)
-    # off-diagonals are a Monte-Carlo mean of m = n_features//2 cosines, so the
+    # off-diagonals are a Monte-Carlo mean of m = n_features cosines, so the
     # per-entry std-error is ~1/sqrt(m); tolerate a few sigma (cf. atol=0.15 in
     # test_rff_approximates_rbf). The diagonal is checked exactly above.
     assert jnp.allclose(K, exact, atol=0.1)    # good approx at large D
-    # odd n_features rounds down to an even output dim
+    # output dim is exactly 2 * n_features (two features -- cos, sin -- per frequency)
     rff2 = RandomFourierFeatures(sigma=1.0, n_features=31, seed=1)
     rff2._initialize_weights(4)
-    assert rff2.feature_map(X).shape == (8, 30)
+    assert rff2.feature_map(X).shape == (8, 62)
 

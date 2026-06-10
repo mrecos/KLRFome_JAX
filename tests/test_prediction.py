@@ -102,3 +102,36 @@ def test_focal_predictor_raster_shape(simple_training_data, simple_raster_stack)
     assert predictions.shape == (simple_raster_stack.height, simple_raster_stack.width)
     assert jnp.all((predictions >= 0) & (predictions <= 1))
 
+
+def test_wasserstein_raster_predict_variable_size_bags():
+    """Wasserstein raster fit + predict must stay consistent for variable-size bags.
+
+    Both the fitted kernel and the focal predictor now use the single global-Q
+    quantile representation, so they agree even when bags differ in size (which
+    previously took the inconsistent non-uniform branch).
+    """
+    from klrfome.api import KLRfome
+
+    collections = []
+    for i in range(4):
+        n = 10 + i
+        collections.append(SampleCollection(random.normal(random.PRNGKey(i), (n, 2)) + 1.0, 1, f"s{i}"))
+    for i in range(4):
+        n = 11 + i
+        collections.append(SampleCollection(random.normal(random.PRNGKey(50 + i), (n, 2)) - 1.0, 0, f"b{i}"))
+    training_data = TrainingData(collections=collections, feature_names=["a", "b"])
+
+    model = KLRfome(kernel_type="wasserstein", n_projections=32, n_quantiles=64,
+                    window_size=3, lambda_reg=0.1, seed=0)
+    model.fit(training_data)
+
+    raster = RasterStack(
+        data=jnp.array(np.random.rand(2, 8, 8)),
+        transform=from_bounds(0, 0, 1, 1, 8, 8),
+        crs="EPSG:4326",
+        band_names=["a", "b"],
+    )
+    preds = model.predict(raster, show_progress=False)
+    assert preds.shape == (8, 8)
+    assert jnp.all((preds >= 0) & (preds <= 1))
+

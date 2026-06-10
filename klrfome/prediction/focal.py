@@ -10,7 +10,7 @@ from tqdm import tqdm
 from jaxtyping import Array, Float
 
 from ..kernels.distribution import MeanEmbeddingKernel
-from ..kernels.wasserstein import WassersteinKernel
+from ..kernels.wasserstein import WassersteinKernel, _resample_sorted_projections
 from ..data.formats import TrainingData, RasterStack, SampleCollection
 
 
@@ -381,42 +381,31 @@ class WassersteinFocalPredictor:
     training_collections: list  # List[SampleCollection]
     klr_alpha: Float[Array, "n_train"]
     window_size: int = 5
-    
+    n_quantiles: int = 128
+
     def __post_init__(self):
-        """Pre-compute projected and sorted training data as stacked arrays."""
+        """Pre-compute the Q-quantile training representation."""
         sw = self.wasserstein_kernel._sw
         dim = self.training_collections[0].samples.shape[1]
         sw._ensure_projections(dim)
-        
+
         # Store projections for use during prediction
         self._projections = sw._projections
         self._p = sw.p
         self._sigma = self.wasserstein_kernel.sigma
         self._n_projections = sw.n_projections
-        
-        # Pre-project and sort all training collections
-        # Check if all have same size for optimized path
-        sample_sizes = [len(coll.samples) for coll in self.training_collections]
-        self._uniform_samples = len(set(sample_sizes)) == 1
-        
-        if self._uniform_samples:
-            # OPTIMIZED: Stack into (n_train, n_samples, n_projections) for vectorization
-            projected_sorted_list = []
-            for coll in self.training_collections:
-                proj = jnp.array(coll.samples) @ self._projections.T  # (m, L)
-                sorted_proj = jnp.sort(proj, axis=0)
-                projected_sorted_list.append(sorted_proj)
-            # Shape: (n_train, n_samples, n_projections)
-            self._training_stacked = jnp.stack(projected_sorted_list)
-            self._n_samples_per_collection = sample_sizes[0]
-        else:
-            # Fallback for non-uniform sizes
-            self._training_projected_sorted = []
-            for coll in self.training_collections:
-                proj = jnp.array(coll.samples) @ self._projections.T
-                sorted_proj = jnp.sort(proj, axis=0)
-                self._training_projected_sorted.append(sorted_proj)
-            self._training_stacked = None
+
+        # Represent every training bag by the SAME number of sorted quantile points
+        # (single global Q). This matches how the Wasserstein kernel is fit
+        # (build_similarity_matrix(n_quantiles=...)), so fit and predict use one
+        # consistent representation even when bags have different sizes -- avoiding the
+        # pair-dependent interpolation that made raw native-size SW inconsistent.
+        self._training_stacked = sw.quantile_embeddings(
+            self.training_collections, self.n_quantiles
+        )  # (n_train, Q, L)
+        self._uniform_samples = True
+        self._n_samples_per_collection = self.n_quantiles
+        self._training_projected_sorted = None
     
     def predict_window(
         self,
@@ -431,16 +420,14 @@ class WassersteinFocalPredictor:
         Returns:
             Predicted probability of site presence
         """
-        # Project and sort the window samples
+        # Project, sort, and resample the window to the same Q quantile points the
+        # training bags use, so the comparison happens in one consistent space.
         window_proj = window_samples @ self._projections.T  # (m, L)
         window_sorted = jnp.sort(window_proj, axis=0)
-        
-        # Compute similarity to each training collection
-        if self._uniform_samples and self._training_stacked is not None:
-            similarities = self._compute_similarities_vectorized(window_sorted)
-        else:
-            similarities = self._compute_similarities_loop(window_sorted)
-        
+        window_q = _resample_sorted_projections(window_sorted, self.n_quantiles)  # (Q, L)
+
+        similarities = self._compute_similarities_vectorized(window_q)
+
         # Apply KLR prediction
         eta = jnp.dot(similarities, self.klr_alpha)
         return float(1.0 / (1.0 + jnp.exp(-eta)))

@@ -7,13 +7,13 @@ from typing import Any, Iterable, List, Literal, Optional, Sequence, Set, Tuple,
 import jax.numpy as jnp
 import numpy as np
 import rasterio
+from numpy.typing import NDArray
 from rasterio.features import geometry_mask, geometry_window
 from rasterio.transform import rowcol, xy
 from rasterio.windows import Window
 from shapely.geometry import mapping
 
 from ..data.formats import Bag, BagDataset
-
 
 CellIndex = Tuple[int, int]
 
@@ -265,7 +265,7 @@ def align_bags_to_raster(
                 }
             )
             continue
-        chosen = np.asarray(unique_indices, dtype=int)
+        chosen: NDArray[np.int_] = np.asarray(unique_indices, dtype=int)
         metadata = dict(bag.metadata or {})
         metadata.update(
             {
@@ -320,7 +320,9 @@ def build_spatial_background_bags(
         raise ValueError("site_bags must be nonempty")
     n_background = n_background or len(site_bags)
     rng = np.random.default_rng(seed)
-    sizes = np.asarray([min(bag.n_samples, cap_cells) for bag in site_bags], dtype=int)
+    sizes: NDArray[np.int_] = np.asarray(
+        [min(bag.n_samples, cap_cells) for bag in site_bags], dtype=int
+    )
     if match_sizes_exactly:
         if n_background != len(site_bags):
             raise ValueError(

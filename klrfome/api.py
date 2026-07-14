@@ -178,6 +178,10 @@ class KLRfome:
             label=1,
             random_seed=self.seed,
         )
+        for index, bag in enumerate(site_collections):
+            bag.id = f"site-{index:05d}"
+            bag.group_id = bag.id
+            bag.metadata = {**(bag.metadata or {}), "source": "site"}
 
         # Generate exclusion geometries if buffer specified
         exclusion_geoms = None
@@ -200,6 +204,10 @@ class KLRfome:
             label=0,
             random_seed=self.seed,
         )
+        for index, bag in enumerate(background_collections):
+            bag.id = f"background-{index:05d}"
+            bag.group_id = bag.id
+            bag.metadata = {**(bag.metadata or {}), "source": "background"}
 
         collections = site_collections + background_collections
 

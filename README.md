@@ -1,578 +1,256 @@
+# KLRfome
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![JAX](https://img.shields.io/badge/JAX-enabled-green.svg)](https://github.com/google/jax)
-[![DOI](https://zenodo.org/badge/103055953.svg)](https://zenodo.org/badge/latestdoi/103055953)
-
-<p align="center">
-<img width="326" height="134" src="https://github.com/mrecos/klrfome/blob/master/klrfome_logo/KLR-black.png?raw=true">
-</p>
-
-# KLRfome - Kernel Logistic Regression on Focal Mean Embeddings
-
-**Python/JAX implementation** for GPU-accelerated distribution regression on geospatial data.
-
-> Originally developed for archaeological site prediction, KLRfome solves **Distribution Regression** problems where each observation is characterized by a *distribution* of measurements rather than a single feature vector.
-
-**Original R Package**: [mrecos/klrfome](https://github.com/mrecos/klrfome)  
-**Documentation**: [mrecos.github.io/klrfome](https://mrecos.github.io/klrfome/)  
-**Paper**: Harris, M.D. (2019). KLRfome - Kernel Logistic Regression on Focal Mean Embeddings. *Journal of Open Source Software*, 4(35), 722.
-
-- **Current model/data contract**: [MODEL_DATA_FOUNDATION.md](MODEL_DATA_FOUNDATION.md)
-- **Dated methods roadmap**: [METHODS_ROADMAP_2026-07-13.md](METHODS_ROADMAP_2026-07-13.md)
-- **Section 6 validation notebook**: [notebooks/05_section6_model_validation.ipynb](notebooks/05_section6_model_validation.ipynb)
-
----
-
-## The Problem: Distribution Regression
-
-Traditional regression maps a single outcome to a single set of features—one observation, one feature vector. But many real-world problems don't fit this mold.
-
-**Distribution Regression** maps a single outcome to a *distribution* of features:
-
-| Traditional Regression | Distribution Regression |
-|----------------------|------------------------|
-| One feature vector per observation | Many feature vectors per observation |
-| Point measurements | Spatially distributed measurements |
-| Collapse distribution to summary statistics | Model the full distribution |
-
-### When to Use KLRfome
-
-KLRfome is designed for problems where:
-
-1. **Observations are spatial regions**, not points (e.g., site boundaries, habitat patches, land parcels)
-2. **Each region contains multiple measurements** of environmental or contextual variables
-3. **You want to predict** the probability of an outcome across a landscape
-
-| Domain | Observation Unit | Distribution of Features |
-|--------|-----------------|-------------------------|
-| Archaeology | Site boundary | Environmental measurements within site |
-| Ecology | Habitat patch | Species observations across patch |
-| Remote Sensing | Land parcel | Pixel values within parcel |
-| Urban Planning | Neighborhood | Property characteristics in area |
-| Environmental Science | Watershed | Sensor readings across watershed |
+[![CI](https://github.com/mrecos/KLRFome_JAX/actions/workflows/ci.yml/badge.svg)](https://github.com/mrecos/KLRFome_JAX/actions/workflows/ci.yml)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
+[![Original JOSS paper](https://zenodo.org/badge/103055953.svg)](https://doi.org/10.21105/joss.00722)
 
 <p align="center">
-<img width="800" height="600" src="https://github.com/mrecos/klrfome/blob/master/SAA_2018_poster/SAA_2018_poster_small.jpg?raw=true">
+  <img width="326" height="134" src="https://github.com/mrecos/klrfome/blob/master/klrfome_logo/KLR-black.png?raw=true" alt="KLRfome logo">
 </p>
 
----
+**Kernel Logistic Regression on Focal Mean Embeddings:** distribution regression for spatial
+presence-background modelling in Python and JAX.
 
-## How KLRfome Works
+KLRfome models a site as a distribution of environmentally correlated cells. It avoids both
+collapsing a site to a centroid or feature mean and treating every cell as an independent
+observation. During prediction, overlapping focal windows traverse the landscape; each window is
+represented as a distribution and compared with the distributions observed at training sites.
 
-<p align="left">
-<img src="https://github.com/mrecos/klrfome/blob/master/README_images/KLRfome_dataflow.png?raw=true">
+> [!IMPORTANT]
+> With presence-background data, KLRfome produces **relative suitability scores**, not calibrated
+> occurrence probabilities. Background samples describe the available environment; they are not
+> confirmed absences.
+
+## Why distribution regression?
+
+Many spatial modelling workflows force a site into one of two unsuitable representations:
+
+1. one feature vector per site, which discards within-site environmental variation; or
+2. one observation per cell, which overstates the effective sample size because cells within a
+   site are spatially correlated.
+
+KLRfome instead treats the complete bag of cells as the labelled observation. The same logic
+applies to archaeological sites, habitat patches, land parcels, watersheds, and other spatial
+units whose internal distribution may carry information.
+
+<p align="center">
+  <img src="README_images/KLRfome_dataflow.png" alt="KLRfome distribution-regression data flow">
 </p>
 
-1. **Represent** each location as a collection ("bag") of environmental feature vectors sampled from within its boundary
-2. **Compute similarity** between locations using mean embeddings in a Reproducing Kernel Hilbert Space (RKHS)
-3. **Fit** either primal logistic regression on an explicit embedding or dual Kernel Logistic Regression on a bag-level similarity matrix
-4. **Predict** across the landscape using focal windows that compute similarity between each neighborhood and the training locations
+The name describes the original method: **K**ernel **L**ogistic **R**egression on **Fo**cal
+**M**ean **E**mbeddings (KLRfome, pronounced “clear foam”).
 
-The name derives from this approach: **K**ernel **L**ogistic **R**egression on **FO**cal **M**ean **E**mbeddings (**KLRfome**, pronounced *"clear foam"*).
+## Implemented methods
 
----
+The current API separates the bag representation, bag-level decision rule, and solver.
+
+| ID | Bag representation | Bag-level decision rule | Solver |
+|---|---|---|---|
+| **M0** | Exact RBF kernel mean embedding | Linear RKHS inner product | Dual KLR |
+| **M1** | Random Fourier feature mean embedding | Linear | Primal regularized logistic regression |
+| **M2** | Random Fourier feature mean embedding | RBF | Dual KLR |
+| **M3** | Fixed-quantile sliced Wasserstein-2 | RBF | Dual KLR |
+
+M0 preserves the original distribution-regression lineage. M1 offers a scalable explicit
+mean-embedding approximation, M2 adds a nonlinear decision kernel over that embedding, and M3
+compares projected distributional shape. No method is treated as universally preferred; method
+comparisons must use the same bags and spatial validation folds.
 
 ## Installation
 
-```bash
-# From PyPI (when available)
-pip install klrfome
+KLRfome is currently installed from source:
 
-# From source
-git clone https://github.com/mrecos/KLRFome_JAX
+```bash
+git clone https://github.com/mrecos/KLRFome_JAX.git
 cd KLRFome_JAX
-pip install -e .
+
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```
 
-### Requirements
+For tests and development tooling:
 
-- Python 3.9+
-- JAX (with optional GPU support)
-- NumPy, Rasterio, GeoPandas
-
-For GPU acceleration, install JAX with CUDA support:
 ```bash
-pip install --upgrade "jax[cuda12]"
+python -m pip install -e ".[dev]"
 ```
 
----
+JAX uses the CPU by default. Install a platform-appropriate JAX build separately when GPU
+acceleration is required.
 
-## Quick Start
+## Quick start
 
-Example data is included in `example_data/` so you can run this immediately after installation:
+The repository includes a deterministic synthetic raster example. This workflow is also executed
+by continuous integration through [`examples/readme_quickstart.py`](examples/readme_quickstart.py).
 
 ```python
-from klrfome import KLRfome, RasterStack
+from pathlib import Path
+
 import geopandas as gpd
 import numpy as np
-import rasterio
-from sklearn.metrics import roc_auc_score
-import matplotlib.pyplot as plt
 
-# Load the included example data (200x200 rasters, 25 sites)
-raster_stack = RasterStack.from_files([
-    'example_data/var1.tif',
-    'example_data/var2.tif', 
-    'example_data/var3.tif'
-])
-sites = gpd.read_file('example_data/sites.geojson')
+from klrfome import KLRfome, ModelSpec, RasterStack
 
-# Initialize model with hyperparameters
+root = Path("example_data")
+rasters = RasterStack.from_files(
+    [str(root / name) for name in ("var1.tif", "var2.tif", "var3.tif")]
+)
+sites = gpd.read_file(root / "sites.geojson")
+
 model = KLRfome(
-    lambda_reg=0.1,      # Regularization strength
-    window_size=5,       # Focal window size for prediction
-    n_rff_features=256,  # Random Fourier Features (0 for exact kernel)
-    # By default the bandwidth is auto-calibrated to the data (auto_sigma=True) and
-    # covariates are z-scored using training stats (scale_features=True). Pass
-    # sigma=... with auto_sigma=False to set the bandwidth manually.
+    spec=ModelSpec.m1(rff_features=256),
+    lambda_reg=0.1,
+    window_size=5,
+    seed=42,
 )
 
-# Prepare training data: extract samples at sites and background locations
-training_data = model.prepare_data(
-    raster_stack=raster_stack,
+training = model.prepare_data(
+    raster_stack=rasters,
     sites=sites,
-    n_background=50,           # Number of background sample locations
-    samples_per_location=20    # Samples per site/background location
+    n_background=25,
+    samples_per_location=20,
 )
+model.fit(training)
 
-# Fit the model
-model.fit(training_data)
-
-# Predict a score surface across the landscape. With presence-background data,
-# interpret this as relative suitability rather than occurrence probability.
-predictions = model.predict(raster_stack)
-print(f"Predictions shape: {predictions.shape}")
-print(f"Probability range: [{predictions.min():.3f}, {predictions.max():.3f}]")
+suitability = np.asarray(
+    model.predict(rasters, batch_size=512, show_progress=True)
+)
+print(suitability.shape)
+print(float(np.nanmin(suitability)), float(np.nanmax(suitability)))
 ```
 
-### Evaluate Model Performance
+This example uses M1 for an efficient mean-embedding workflow. Replace the specification with
+`ModelSpec.m0()`, `ModelSpec.m2()`, or `ModelSpec.m3()` to use another supported architecture.
+Run the complete example with:
 
-```python
-# Extract predictions at site locations
-transform = raster_stack.transform
-site_preds = []
-for idx, row in sites.iterrows():
-    r, c = rasterio.transform.rowcol(transform, row.geometry.x, row.geometry.y)
-    if 0 <= r < predictions.shape[0] and 0 <= c < predictions.shape[1]:
-        site_preds.append(float(predictions[r, c]))
-
-# Sample background predictions
-np.random.seed(42)
-bg_preds = [float(predictions[np.random.randint(0, predictions.shape[0]),
-                              np.random.randint(0, predictions.shape[1])]) 
-            for _ in range(200)]
-
-# Compute metrics
-all_preds = site_preds + bg_preds
-all_labels = [1] * len(site_preds) + [0] * len(bg_preds)
-auc = roc_auc_score(all_labels, all_preds)
-
-# Find optimal threshold (Youden's J)
-thresholds = np.linspace(0, 1, 100)
-best_j, best_thresh = 0, 0.5
-for t in thresholds:
-    tp = sum((p >= t and l == 1) for p, l in zip(all_preds, all_labels))
-    tn = sum((p < t and l == 0) for p, l in zip(all_preds, all_labels))
-    sens = tp / sum(all_labels)
-    spec = tn / (len(all_labels) - sum(all_labels))
-    j = sens + spec - 1
-    if j > best_j:
-        best_j, best_thresh = j, t
-
-print(f"\n=== Model Performance ===")
-print(f"AUC: {auc:.3f}")
-print(f"Optimal Threshold: {best_thresh:.2f}")
-print(f"Youden's J: {best_j:.3f}")
-print(f"Site prediction mean: {np.mean(site_preds):.3f}")
-print(f"Background prediction mean: {np.mean(bg_preds):.3f}")
-```
-
-### Visualize Predictions
-
-```python
-# Plot prediction surface with site locations
-fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-
-# Plot probability surface
-im = ax.imshow(predictions, cmap='RdYlGn', vmin=0, vmax=1, origin='upper')
-plt.colorbar(im, ax=ax, label='Probability', shrink=0.8)
-
-# Overlay site locations
-for idx, row in sites.iterrows():
-    r, c = rasterio.transform.rowcol(transform, row.geometry.x, row.geometry.y)
-    ax.plot(c, r, 'ko', markersize=8, markerfacecolor='none', markeredgewidth=2)
-    ax.plot(c, r, 'k+', markersize=6, markeredgewidth=2)
-
-ax.set_title(f'KLRfome Probability Surface (AUC={auc:.3f})', fontsize=14)
-ax.set_xlabel('Column')
-ax.set_ylabel('Row')
-plt.tight_layout()
-plt.savefig('klrfome_prediction_map.png', dpi=150)
-plt.show()
+```bash
+python examples/readme_quickstart.py --full-surface
 ```
 
 <p align="center">
-<img src="README_images/KLRfome_prediction.png" alt="KLRfome Probability Surface">
+  <img src="README_images/KLRfome_prediction.png" alt="Example KLRfome relative-suitability surface">
 </p>
 
----
-
-## Detailed Workflow
-
-### 1. Set Hyperparameters
-
-```python
-# Key hyperparameters
-sigma = 0.5       # Controls how "close" observations must be to be similar
-lambda_reg = 0.1  # Regularization penalty (higher = more conservative model)
-window_size = 5   # Focal window dimensions (5 = 5x5 pixel window)
-```
-
-**Hyperparameter guidance:**
-- **sigma**: Lower values require observations to be very similar; higher values allow more distant observations to influence each other. Tune via cross-validation.
-- **lambda_reg**: Higher values shrink coefficients toward zero, reducing overfitting. Must be > 0.
-- **window_size**: Should match the spatial scale of your phenomenon. Larger windows capture broader context but blur fine-scale patterns.
-
-### 2. Prepare Training Data
-
-```python
-from klrfome import KLRfome, RasterStack
-from klrfome.data.formats import SampleCollection, TrainingData
-import geopandas as gpd
-import numpy as np
-
-# Load example data (or substitute your own files)
-raster_stack = RasterStack.from_files([
-    'example_data/var1.tif',
-    'example_data/var2.tif',
-    'example_data/var3.tif'
-])
-sites = gpd.read_file('example_data/sites.geojson')
-
-# Initialize model
-model = KLRfome(sigma=0.5, lambda_reg=0.1, window_size=5)
-
-# Prepare data with automatic background sampling
-training_data = model.prepare_data(
-    raster_stack=raster_stack,
-    sites=sites,
-    n_background=50,
-    samples_per_location=20,
-    site_buffer=0.01,                # Buffer around site points
-    background_exclusion_buffer=0.02  # Exclude background near sites
-)
-
-print(f"Training collections: {len(training_data.collections)}")
-print(f"Features: {training_data.feature_names}")
-```
-
-### 3. Scaling & bandwidth are automatic
-
-Two things that are easy to get wrong are handled for you by default:
-
-- **Feature scaling** (`scale_features=True`): covariates are z-scored using the
-  training statistics, and the *same* statistics are re-applied to the prediction
-  raster. (Mirrors the R package's `format_site_data` + `scale_prediction_rasters`.)
-- **Bandwidth calibration** (`auto_sigma=True`): `sigma` is set from the data via
-  the median pairwise-distance heuristic at `fit()` time.
-
-> **Why this matters:** the RBF bandwidth must scale with the number of covariates.
-> A fixed small `sigma` (e.g. 0.5) is fine for 2–3 features but **saturates the
-> kernel to ~0 in higher dimensions** — for *d* z-scored features a typical squared
-> distance is ≈ 2·*d*, so `exp(-2d / 2σ²)` underflows — which silently makes
-> predictions no better than random. Auto-calibration prevents this failure mode.
-
-To control them manually:
-
-```python
-model = KLRfome(sigma=3.0, auto_sigma=False, scale_features=False)
-```
-
-### 4. Fit Model and Predict
-
-```python
-model.fit(training_data)          # scaling + sigma calibration happen here
-predictions = model.predict(raster_stack, batch_size=1000, show_progress=True)
-
-# predictions is a 2D array of probabilities [0, 1]
-print(f"Prediction range: [{predictions.min():.3f}, {predictions.max():.3f}]")
-print(f"Calibrated sigma: {model.sigma:.3f}")
-```
-
-<p align="left">
-<img src="https://github.com/mrecos/klrfome/blob/master/README_images/KLRfome_prediction.png?raw=true">
-</p>
-
-### 5. Evaluate Model
-
-```python
-from sklearn.metrics import roc_auc_score
-import rasterio
-
-# Extract predictions at site and background locations
-site_preds = []
-for idx, row in sites.iterrows():
-    x, y = row.geometry.x, row.geometry.y
-    row_idx, col = rasterio.transform.rowcol(raster_stack.transform, x, y)
-    if 0 <= row_idx < predictions.shape[0] and 0 <= col < predictions.shape[1]:
-        site_preds.append(predictions[row_idx, col])
-
-# Sample background predictions
-np.random.seed(42)
-bg_preds = [
-    predictions[np.random.randint(0, predictions.shape[0]),
-                np.random.randint(0, predictions.shape[1])]
-    for _ in range(500)
-]
-
-# Compute AUC
-all_preds = site_preds + bg_preds
-all_labels = [1] * len(site_preds) + [0] * len(bg_preds)
-auc = roc_auc_score(all_labels, all_preds)
-print(f"AUC: {auc:.3f}")
-```
-
----
-
-## Working with tabular (pre-extracted) data
+## Data inputs
 
-If your covariates are already extracted to a table (one row per cell, with a
-`presence` flag, a `SITENO` group id, covariate columns, and `x`/`y` coordinates),
-use the helpers in `klrfome.data.tabular` instead of raster extraction:
+The canonical objects are `Bag` and `BagDataset`. A bag contains a finite cell-by-feature sample
+array, its label and ID, optional per-cell coordinates, grouping and stratum IDs, and metadata. A
+dataset adds feature order, CRS, and a declared `presence_background` or `presence_absence` study
+design.
 
-```python
-import pandas as pd
-from klrfome.data.tabular import (
-    bags_from_dataframe, stratified_bag_split, scale_bags,
-    median_sigma, mean_embedding_heldout,
-)
+KLRfome supports:
 
-df = pd.read_csv("my_site_data.csv")
-bags = bags_from_dataframe(df, background="spatial")     # spatial k-NN background patches
-train, test = stratified_bag_split(bags, test_fraction=0.3)
-train_s, test_s, mu, sd = scale_bags(train, test)
-auc, probs, y = mean_embedding_heldout(train_s, test_s, sigma=median_sigma(train_s))
-print(f"held-out AUC = {auc:.3f}")
-```
+- **tabular cell data** with site IDs, labels, coordinates, and covariates;
+- **aligned raster covariates** through lazy Rasterio-backed window extraction;
+- **point sites** with an explicit spatial buffer or pixel window;
+- **polygon sites** using all valid covered cells; and
+- **spatial background bags** sampled from the common all-band raster validity mask.
 
-**Background construction matters.** `background="spatial"` builds each background
-bag as a compact k-NN patch in `x`/`y`, so it carries the same within-bag spatial
-autocorrelation a real site does. Random background bags (scattered cells) are an
-easy giveaway that *inflates* AUC — use `background="random"` only as a baseline.
+Tabular and raster paths return the same validated `BagDataset` contract. For large raster inputs,
+use `RasterSource` so prediction and extraction read windows rather than materializing the entire
+stack in JAX.
 
-**Spatial domain.** You can only predict where covariates exist, and the model is
-valid only within the region the *background* was sampled from. If background covers
-only part of the study area, clip sites to that footprint explicitly with
-`restrict_to_background_domain(df)` rather than silently scoring out-of-domain sites.
+See [MODEL_DATA_FOUNDATION.md](MODEL_DATA_FOUNDATION.md) for the complete model, data, and
+compatibility contract.
 
-**Evaluate it as presence-only, not binary classification.** "Background" is
-*unlabeled*, not true absence — and for prospection the undiscovered sites you are
-hunting for live inside it (a high-probability cell with no known site is the
-*product*, not an error). The sampled prevalence is also not the landscape base rate.
-So **specificity, precision, accuracy, and balanced sens/spec (Youden's J) are biased
-and should not set the decision threshold.** Instead:
+## Focal prediction
 
-- judge discrimination with the presence-only **Continuous Boyce Index**
-  (`continuous_boyce_index`); AUC is a secondary, conservative summary;
-- choose an operating point by **area budget** — designate the top *X%* of the
-  landscape (`threshold_for_area`) and report capture, **Kvamme's gain**, and **lift**
-  (`capture_gain_table`).
+The “F” in KLRfome is operational, not historical. At prediction time an overlapping focal window
+moves across the raster. Each valid window becomes a new bag, is transformed with the fitted
+training preprocessor, and receives a relative-suitability score from the fitted distribution
+model.
 
-```python
-from klrfome.data.tabular import continuous_boyce_index, capture_gain_table
-cbi, mids, F = continuous_boyce_index(holdout_site_probs, landscape_probs)
-table = capture_gain_table(landscape_probs, holdout_site_probs, area_fractions=(0.05, 0.1, 0.2))
-# e.g. "top 5% of area -> captures 29% of held-out sites, ~6x random density (lift)"
-```
+Canonical traversal uses stride 1. Coarser strides are useful for interactive previews but produce
+a sparse set of focal anchors rather than the complete prediction surface. Prediction batching
+controls memory without changing the fitted model or focal-window definition.
 
-An end-to-end, annotated walkthrough — bag construction, sigma calibration, both
-kernels, the prediction-probability surface, the Boyce index, area-budget
-capture/gain/lift, calibration, permutation importance, a recall map, and (demoted and
-clearly labelled *biased*) a confusion matrix — is in
-**`notebooks/04_real_data_validation.ipynb`**.
+## Validation and interpretation
 
----
+Spatially grouped validation keeps related sites or spatial blocks together and fits scaling,
+bandwidths, and model parameters using training folds only. All methods in a comparison receive
+the same immutable fold plan.
 
-## Key Concepts
+Useful presence-background diagnostics include:
 
-### Mean Embeddings (Default)
+- ROC AUC as a secondary ranking summary;
+- PR AUC, interpreted relative to the constructed background prevalence;
+- continuous Boyce index;
+- top-area capture and lift; and
+- direct inspection of mapped predictions.
 
-Instead of collapsing a distribution to summary statistics (mean, variance), KLRfome maps distributions into a Reproducing Kernel Hilbert Space (RKHS) where the **mean embedding** preserves the full distributional information.
+Mapped predictions are especially important because spatial artifacts and support mismatches can
+be difficult to identify from aggregate metrics alone.
 
-The similarity between two distributions is computed as the inner product of their mean embeddings:
+## Project status
 
-$$K(P, Q) = \langle \mu_P, \mu_Q \rangle_{\mathcal{H}}$$
+The Python/JAX model and data foundation, M0–M3 reference methods, tabular/raster ingestion,
+spatial validation, and focal prediction workflow are implemented and tested. The current real-data
+comparison covers one physio-shed and should not be used for final method ranking.
 
-### Wasserstein Kernel (Advanced)
+Open methodological decisions include:
 
-For distributions that differ primarily in *shape* rather than *mean* (e.g., bimodal vs unimodal), KLRfome offers a **Wasserstein kernel** option:
+- pooling or partial pooling across physio-sheds with sparse site counts;
+- calibration for study designs that provide the information required for it;
+- learned or multiscale distribution representations; and
+- final method selection across multiple realistic data settings.
 
-```python
-model = KLRfome(
-    sigma=0.5,
-    kernel_type='wasserstein',  # Shape-aware comparison
-    n_projections=100           # Sliced Wasserstein approximation
-)
-```
+## Documentation and examples
 
-The Wasserstein kernel uses **Sliced Wasserstein distance**—an efficient approximation that projects distributions onto random 1D subspaces. This captures distributional structure that mean embeddings may miss.
+- [Model and data foundation](MODEL_DATA_FOUNDATION.md)
+- [Methods status and roadmap](METHODS_ROADMAP_2026-07-13.md)
+- [Section 6 comparison summary](SECTION6_COMPARISON_SUMMARY_2026-07-13.md)
+- [Section 6 validation notebook](notebooks/05_section6_model_validation.ipynb)
+- [R-to-Python/JAX methodological comparison](COMPARISON_R_vs_JAX.md)
+- [Synthetic example data](example_data/README.md)
 
-| Use Case | Recommended Kernel |
-|----------|-------------------|
-| Distributions differ by location/mean | `mean_embedding` (default) |
-| Distributions have similar means, different shapes | `wasserstein` |
-| Need R compatibility | `mean_embedding` |
-| Need maximum discrimination | Try both, compare AUC |
+Generated research data and validation results under `site_data/` are intentionally excluded from
+version control.
 
-### Kernel Logistic Regression
-
-Given the similarity matrix K between all training locations, KLR fits coefficients α using Iteratively Reweighted Least Squares (IRLS):
-
-$$(K + \lambda \cdot \text{diag}(1/W)) \cdot \alpha = z$$
-
-The predicted probability for a new location is:
-
-$$p = \sigma(k^* \cdot \alpha)$$
-
-where k* is the similarity between the new location and all training locations.
-
-### Focal Prediction
-
-For raster prediction, a focal window slides across the landscape. At each position:
-1. Extract the samples within the window
-2. Compute similarity to all training distributions
-3. Apply the trained model to get probability
-
----
-
-## Performance Tips
-
-### Use Random Fourier Features
-
-For large datasets, exact kernel computation is O(n²). Use Random Fourier Features for O(n·D) approximation:
-
-```python
-model = KLRfome(
-    sigma=0.5,
-    lambda_reg=0.1,
-    n_rff_features=256  # 256-512 is usually sufficient
-)
-```
-
-### Batch Prediction
-
-Control memory usage with batch_size:
-
-```python
-predictions = model.predict(raster_stack, batch_size=500)
-```
-
-### GPU Acceleration
-
-JAX automatically uses GPU if available. Check with:
-
-```python
-import jax
-print(jax.devices())  # Shows available devices
-```
-
----
-
-## Validation Against R
-
-The Python implementation has been validated against the original R package:
+## Development
 
 ```bash
-# Generate benchmark data
-python benchmarks/generate_benchmark_data.py
-
-# Export R results
-Rscript benchmarks/validate_r_export.R
-
-# Compare Python to R
-python benchmarks/validate_against_r.py
+python -m pytest tests/ -v
+python -m black --check klrfome tests examples
+python -m ruff check klrfome tests examples
+python -m mypy klrfome
 ```
 
-All core components (kernel matrix, alpha coefficients, predictions) match the R implementation exactly.
+GitHub Actions runs the test suite, style checks, type checks, and the README quick-start smoke
+workflow on every push and pull request.
 
----
+## History and citation
 
-## API Reference
+KLRfome was originally developed in R and published in the *Journal of Open Source Software*:
 
-### KLRfome Class
+> Harris, M. D. (2019). KLRfome — Kernel Logistic Regression on Focal Mean Embeddings.
+> *Journal of Open Source Software*, 4(35), 722.
+> <https://doi.org/10.21105/joss.00722>
 
-```python
-KLRfome(
-    sigma: float = 0.5,           # Kernel bandwidth (used when auto_sigma=False)
-    lambda_reg: float = 0.1,      # Regularization strength
-    kernel_type: str = 'mean_embedding',  # or 'wasserstein'
-    n_rff_features: int = 256,    # For mean_embedding: 0 for exact, >0 for RFF
-    n_projections: int = 100,     # For wasserstein: Sliced Wasserstein projections
-    wasserstein_p: int = 2,       # For wasserstein: p=1 or p=2
-    window_size: int = 5,         # Focal window size
-    scale_features: bool = True,  # z-score covariates with training stats
-    auto_sigma: bool = True,      # calibrate sigma from data at fit() time
-    seed: int = 42                # Random seed
-)
-```
-
-**Methods:**
-- `prepare_data(raster_stack, sites, ...)` → TrainingData
-- `fit(training_data)` → self
-- `predict(raster_stack, batch_size=1000)` → ndarray
-- `save_predictions(predictions, path)` → None
-
-### RasterStack Class
-
-```python
-RasterStack(
-    data: jax.Array,              # Shape: (bands, height, width)
-    transform: Affine,            # Rasterio affine transform
-    crs: str,                     # Coordinate reference system
-    band_names: List[str]         # Names for each band
-)
-```
-
-**Class Methods:**
-- `RasterStack.from_files(paths)` → RasterStack
-
----
-
-## Citation
-
-Please cite this package as:
-
-> Harris, Matthew D. (2019). KLRfome - Kernel Logistic Regression on Focal Mean Embeddings. *Journal of Open Source Software*, 4(35), 722. https://doi.org/10.21105/joss.00722
-
-For the Python/JAX implementation:
-
-> Harris, Matthew D. (2025). KLRfome-JAX: GPU-Accelerated Distribution Regression for Geospatial Prediction. https://github.com/mrecos/KLRFome_JAX
-
----
+The [original R repository](https://github.com/mrecos/klrfome) and its historical documentation
+remain available for provenance. This repository contains the current Python/JAX implementation.
 
 ## Acknowledgments
 
-This model is inspired by and builds upon:
-
-- Zoltán Szabó's work on mean embeddings (Szabó et al., 2015)
-- Ji Zhu & Trevor Hastie's Kernel Logistic Regression algorithm (Zhu and Hastie, 2005)
-
-Special thanks to Zoltán Szabó for correspondence during the development of this approach, and to Ben Marwick for moral support and the `rrtools` package used to create the original R package.
-
----
+The methodology builds on kernel mean embeddings and distribution regression, including work by
+Szabó, Gretton, Póczos, Sriperumbudur, Muandet, Fukumizu, Schölkopf, Zhu, and Hastie. The original
+project also benefited from correspondence with Zoltán Szabó and support from Ben Marwick.
 
 ## License
 
-**Code:** MIT License  
-**Text and figures:** [CC-BY-4.0](http://creativecommons.org/licenses/by/4.0/)  
-**Data:** [CC-0](http://creativecommons.org/publicdomain/zero/1.0/) (attribution requested)
+- **Code:** MIT
+- **Text and figures:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+- **Example data:** [CC0](https://creativecommons.org/publicdomain/zero/1.0/)
 
----
+## Selected references
 
-## References
-
-- Szabó, Z., Gretton, A., Póczos, B., & Sriperumbudur, B. (2015). Two-stage sampled learning theory on distributions. *AISTATS*, 948-57.
-- Szabó, Z., Sriperumbudur, B., Póczos, B., & Gretton, A. (2016). Learning theory for distribution regression. *JMLR*, 17, 1-40.
-- Zhu, J., & Hastie, T. (2005). Kernel logistic regression and the import vector machine. *JCGS*, 14(1), 185-205.
-- Muandet, K., Fukumizu, K., Sriperumbudur, B., & Schölkopf, B. (2017). Kernel mean embedding of distributions: A review and beyond. *Foundations and Trends in ML*, 10(1-2), 1-141.
-- Flaxman, S., Wang, Y.X., & Smola, A.J. (2015). Who supported Obama in 2012? Ecological inference through distribution regression. *KDD*, 289-98.
+- Harris, M. D. (2019). KLRfome — Kernel Logistic Regression on Focal Mean Embeddings. *JOSS*,
+  4(35), 722.
+- Muandet, K., Fukumizu, K., Sriperumbudur, B., & Schölkopf, B. (2017). Kernel mean embedding of
+  distributions: A review and beyond. *Foundations and Trends in Machine Learning*, 10(1–2),
+  1–141.
+- Szabó, Z., Sriperumbudur, B., Póczos, B., & Gretton, A. (2016). Learning theory for distribution
+  regression. *Journal of Machine Learning Research*, 17, 1–40.
+- Zhu, J., & Hastie, T. (2005). Kernel logistic regression and the import vector machine. *Journal
+  of Computational and Graphical Statistics*, 14(1), 185–205.

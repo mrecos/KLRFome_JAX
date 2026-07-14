@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax import jit
 from jaxtyping import Array, Float
+from numpy.typing import NDArray
 
 from ..data.formats import Bag, BagDataset
 from ..data.preprocessing import BagStandardizer
@@ -212,8 +213,10 @@ class DistributionClassifier:
             raise ValueError("All bags must have the same feature dimension")
         max_left = max(bag.n_samples for bag in left_bags)
         max_right = max(bag.n_samples for bag in right_bags)
-        right = np.zeros((len(right_bags), max_right, dimension), dtype=np.float32)
-        right_mask = np.zeros((len(right_bags), max_right), dtype=np.float32)
+        right: NDArray[np.float32] = np.zeros(
+            (len(right_bags), max_right, dimension), dtype=np.float32
+        )
+        right_mask: NDArray[np.float32] = np.zeros((len(right_bags), max_right), dtype=np.float32)
         for index, bag in enumerate(right_bags):
             count = bag.n_samples
             right[index, :count] = np.asarray(bag.samples)
@@ -222,8 +225,12 @@ class DistributionClassifier:
         blocks = []
         for start in range(0, len(left_bags), self.exact_batch_size):
             chunk = left_bags[start : start + self.exact_batch_size]
-            left = np.zeros((self.exact_batch_size, max_left, dimension), dtype=np.float32)
-            left_mask = np.zeros((self.exact_batch_size, max_left), dtype=np.float32)
+            left: NDArray[np.float32] = np.zeros(
+                (self.exact_batch_size, max_left, dimension), dtype=np.float32
+            )
+            left_mask: NDArray[np.float32] = np.zeros(
+                (self.exact_batch_size, max_left), dtype=np.float32
+            )
             for local_index, bag in enumerate(chunk):
                 count = bag.n_samples
                 left[local_index, :count] = np.asarray(bag.samples)

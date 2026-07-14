@@ -19,7 +19,6 @@ from .klr import KLRFitResult, KernelLogisticRegression
 from .primal import PrimalFitResult, PrimalLogisticRegression
 from .spec import ModelSpec
 
-
 FitResult = Union[KLRFitResult, PrimalFitResult]
 
 

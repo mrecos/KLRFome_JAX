@@ -15,7 +15,6 @@ import numpy as np
 
 from klrfome import KLRfome, ModelSpec, RasterStack
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_DATA = REPOSITORY_ROOT / "example_data"
 

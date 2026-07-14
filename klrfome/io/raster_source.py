@@ -14,7 +14,6 @@ from shapely.geometry import mapping
 
 from ..data.formats import Bag, BagDataset
 
-
 CellIndex = Tuple[int, int]
 
 

@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-
 Representation = Literal["exact_kme", "rff_kme", "sliced_wasserstein"]
 DecisionKernel = Literal["linear", "rbf"]
 Solver = Literal["dual_klr", "primal_logistic"]

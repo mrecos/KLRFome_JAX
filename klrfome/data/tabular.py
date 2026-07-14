@@ -9,6 +9,7 @@ calls ``bags_from_dataframe`` / ``stratified_bag_split`` / ``scale_bags`` and th
 uses the normal kernels + KLR, rather than re-implementing data wrangling inline
 (which is what made the previous notebooks balloon).
 """
+
 from __future__ import annotations
 
 from typing import List, Optional, Sequence, Tuple
@@ -20,9 +21,28 @@ from .formats import SampleCollection
 
 # Column names that are never covariates even if numeric.
 _NON_COVARIATE = {
-    "", "unnamed: 0", "presence", "siteno", "site_no", "site", "site_id",
-    "x", "y", "lon", "lat", "long", "longitude", "latitude",
-    "easting", "northing", "coords_x1", "coords_x2", "fid", "id", "cell", "rowid",
+    "",
+    "unnamed: 0",
+    "presence",
+    "siteno",
+    "site_no",
+    "site",
+    "site_id",
+    "x",
+    "y",
+    "lon",
+    "lat",
+    "long",
+    "longitude",
+    "latitude",
+    "easting",
+    "northing",
+    "coords_x1",
+    "coords_x2",
+    "fid",
+    "id",
+    "cell",
+    "rowid",
 }
 
 
@@ -40,8 +60,7 @@ def detect_columns(df) -> Tuple[str, str, List[str]]:
     if pcol is None or scol is None:
         raise ValueError(f"Need 'presence' and 'SITENO' columns; found {cols[:20]}")
     covars = [
-        c for c in cols
-        if lower[c] not in _NON_COVARIATE and pd.api.types.is_numeric_dtype(df[c])
+        c for c in cols if lower[c] not in _NON_COVARIATE and pd.api.types.is_numeric_dtype(df[c])
     ]
     if not covars:
         raise ValueError("No numeric covariate columns detected.")
@@ -51,8 +70,13 @@ def detect_columns(df) -> Tuple[str, str, List[str]]:
 def detect_xy(df) -> Tuple[str, str]:
     """Return (x_col, y_col) coordinate columns, or raise if none found."""
     lower = {str(c).lower(): c for c in df.columns}
-    for xn, yn in (("x", "y"), ("lon", "lat"), ("longitude", "latitude"),
-                   ("easting", "northing"), ("coords_x1", "coords_x2")):
+    for xn, yn in (
+        ("x", "y"),
+        ("lon", "lat"),
+        ("longitude", "latitude"),
+        ("easting", "northing"),
+        ("coords_x1", "coords_x2"),
+    ):
         if xn in lower and yn in lower:
             return lower[xn], lower[yn]
     raise ValueError(f"No x/y coordinate columns found in {list(df.columns)[:20]}")
@@ -127,6 +151,7 @@ def bags_from_dataframe(
         if coords.shape[0] < max(min_bag, target):
             raise ValueError("Not enough background cells for spatial bagging.")
         from scipy.spatial import cKDTree
+
         tree = cKDTree(coords)
         k = int(min(target, coords.shape[0]))
         seeds = rng.choice(coords.shape[0], size=min(n_back, coords.shape[0]), replace=False)
@@ -159,7 +184,8 @@ def stratified_bag_split(
     neg = [c for c in collections if c.label == 0]
 
     def _take(group):
-        idx = np.arange(len(group)); rng.shuffle(idx)
+        idx = np.arange(len(group))
+        rng.shuffle(idx)
         nt = max(1, int(round(len(group) * test_fraction)))
         test = [group[i] for i in idx[:nt]]
         train = [group[i] for i in idx[nt:]]
@@ -169,7 +195,8 @@ def stratified_bag_split(
     tr_n, te_n = _take(neg)
     train = tr_p + tr_n
     test = te_p + te_n
-    rng.shuffle(train); rng.shuffle(test)
+    rng.shuffle(train)
+    rng.shuffle(test)
     return train, test
 
 
@@ -204,8 +231,8 @@ def labels_of(collections: List[SampleCollection]) -> np.ndarray:
 
 def _sq_dists(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     """Pairwise squared Euclidean distances ||a-b||^2 between rows of A and B."""
-    a2 = (A ** 2).sum(1)[:, None]
-    b2 = (B ** 2).sum(1)[None, :]
+    a2 = (A**2).sum(1)[:, None]
+    b2 = (B**2).sum(1)[None, :]
     return np.maximum(a2 + b2 - 2.0 * (A @ B.T), 0.0)
 
 
@@ -245,29 +272,37 @@ def fit_mean_embedding(
 
     rff = RandomFourierFeatures(sigma=sigma, n_features=n_features, seed=seed)
     rff._initialize_weights(int(train[0].samples.shape[1]))
-    e_tr = np.stack([
-        np.asarray(jnp.mean(rff.feature_map(jnp.asarray(c.samples)), axis=0)) for c in train
-    ])
+    e_tr = np.stack(
+        [np.asarray(jnp.mean(rff.feature_map(jnp.asarray(c.samples)), axis=0)) for c in train]
+    )
 
     if embedding_kernel == "rbf":
         if embedding_sigma is None:
             embedding_sigma = _median_embedding_sigma(e_tr)
-        k_tr = np.exp(-_sq_dists(e_tr, e_tr) / (2.0 * embedding_sigma ** 2))
+        k_tr = np.exp(-_sq_dists(e_tr, e_tr) / (2.0 * embedding_sigma**2))
     else:
         k_tr = e_tr @ e_tr.T
 
     klr = KernelLogisticRegression(lambda_reg=lambda_reg, tol=0.001)
     fit = klr.fit(jnp.asarray(k_tr), jnp.asarray(labels_of(train)))
-    return {"rff": rff, "Etr": e_tr, "alpha": np.asarray(fit.alpha), "sigma": float(sigma),
-            "embedding_kernel": embedding_kernel,
-            "embedding_sigma": (float(embedding_sigma) if embedding_sigma is not None else None)}
+    return {
+        "rff": rff,
+        "Etr": e_tr,
+        "alpha": np.asarray(fit.alpha),
+        "sigma": float(sigma),
+        "embedding_kernel": embedding_kernel,
+        "embedding_sigma": (float(embedding_sigma) if embedding_sigma is not None else None),
+    }
 
 
 def mean_embedding_predict(model: dict, bags: List[SampleCollection]) -> np.ndarray:
     """Probabilities for a list of bags under a fitted mean-embedding model."""
-    e = np.stack([
-        np.asarray(jnp.mean(model["rff"].feature_map(jnp.asarray(c.samples)), axis=0)) for c in bags
-    ])
+    e = np.stack(
+        [
+            np.asarray(jnp.mean(model["rff"].feature_map(jnp.asarray(c.samples)), axis=0))
+            for c in bags
+        ]
+    )
     if model.get("embedding_kernel") == "rbf":
         k = np.exp(-_sq_dists(e, model["Etr"]) / (2.0 * model["embedding_sigma"] ** 2))
         return 1.0 / (1.0 + np.exp(-(k @ model["alpha"])))
@@ -302,18 +337,18 @@ def predict_xy_surface(
     proj = None if is_rbf else (model["Etr"].T @ model["alpha"])  # (D,) linear collapse
     out = np.empty(centers_xy.shape[0])
     for start in range(0, centers_xy.shape[0], batch_size):
-        chunk = centers_xy[start:start + batch_size]
+        chunk = centers_xy[start : start + batch_size]
         _, idx = tree.query(chunk, k=k)
         idx = np.atleast_2d(idx)
-        bags = cells_x_scaled[idx]                   # (b, k, d)
+        bags = cells_x_scaled[idx]  # (b, k, d)
         b, kk, d = bags.shape
         phi = np.asarray(model["rff"].feature_map(jnp.asarray(bags.reshape(b * kk, d))))
-        emb = phi.reshape(b, kk, -1).mean(axis=1)    # (b, D)
+        emb = phi.reshape(b, kk, -1).mean(axis=1)  # (b, D)
         if is_rbf:
             kmat = np.exp(-_sq_dists(emb, model["Etr"]) / (2.0 * model["embedding_sigma"] ** 2))
-            out[start:start + b] = 1.0 / (1.0 + np.exp(-(kmat @ model["alpha"])))
+            out[start : start + b] = 1.0 / (1.0 + np.exp(-(kmat @ model["alpha"])))
         else:
-            out[start:start + b] = 1.0 / (1.0 + np.exp(-(emb @ proj)))
+            out[start : start + b] = 1.0 / (1.0 + np.exp(-(emb @ proj)))
     return out
 
 
@@ -343,8 +378,10 @@ def optimal_threshold(y, probs, metric: str = "tss"):
     best = (0.5, -np.inf, (0, 0, 0, 0))
     for t in cands:
         pred = (probs >= t).astype(int)
-        TP = int(((pred == 1) & (y == 1)).sum()); FP = int(((pred == 1) & (y == 0)).sum())
-        TN = int(((pred == 0) & (y == 0)).sum()); FN = int(((pred == 0) & (y == 1)).sum())
+        TP = int(((pred == 1) & (y == 1)).sum())
+        FP = int(((pred == 1) & (y == 0)).sum())
+        TN = int(((pred == 0) & (y == 0)).sum())
+        FN = int(((pred == 0) & (y == 1)).sum())
         sens = TP / (TP + FN) if (TP + FN) else 0.0
         spec = TN / (TN + FP) if (TN + FP) else 0.0
         if metric == "f1":
@@ -382,7 +419,9 @@ def background_bbox(df, presence_col=None, xy_cols=None, margin: float = 0.0):
     return (xmin, xmax, ymin, ymax)
 
 
-def restrict_to_background_domain(df, presence_col=None, siteno_col=None, xy_cols=None, margin: float = 0.0):
+def restrict_to_background_domain(
+    df, presence_col=None, siteno_col=None, xy_cols=None, margin: float = 0.0
+):
     """Clip the dataframe to the background bounding box. Returns (df_clip, info).
 
     info reports the bbox and how many site cells / site locations were dropped, so
@@ -446,7 +485,9 @@ def reliability_curve(probs, y, n_bins: int = 10):
     return np.array(bc), np.array(mp), np.array(of), np.array(ct)
 
 
-def permutation_importance(model: dict, test_bags, feature_names, n_repeats: int = 5, seed: int = 42):
+def permutation_importance(
+    model: dict, test_bags, feature_names, n_repeats: int = 5, seed: int = 42
+):
     """AUC drop when each covariate is shuffled across the held-out cells.
 
     Returns (baseline_auc, importances) where importances[j] aligns with feature_names[j].
@@ -489,8 +530,7 @@ def threshold_for_area(landscape_probs, area_fraction: float) -> float:
     return float(np.quantile(p, 1.0 - a))
 
 
-def capture_gain_table(landscape_probs, target_probs,
-                       area_fractions=(0.05, 0.10, 0.20, 0.30)):
+def capture_gain_table(landscape_probs, target_probs, area_fractions=(0.05, 0.10, 0.20, 0.30)):
     """Operating points by AREA budget (the prospection-appropriate view).
 
     landscape_probs : predicted P over all landscape cells (defines the cutoff).
@@ -509,12 +549,15 @@ def capture_gain_table(landscape_probs, target_probs,
         capture = float((tgt >= thr).mean()) if len(tgt) else float("nan")
         gain = (1.0 - a / capture) if capture > 0 else float("nan")
         lift = (capture / a) if a > 0 else float("nan")
-        rows.append({"area": float(a), "threshold": thr,
-                     "capture": capture, "gain": gain, "lift": lift})
+        rows.append(
+            {"area": float(a), "threshold": thr, "capture": capture, "gain": gain, "lift": lift}
+        )
     return rows
 
 
-def continuous_boyce_index(presence_probs, background_probs, n_windows: int = 20, window: float = 0.1):
+def continuous_boyce_index(
+    presence_probs, background_probs, n_windows: int = 20, window: float = 0.1
+):
     """Continuous Boyce Index (Hirzel et al. 2006) — presence-only model evaluation.
 
     Needs only presences and the background (available) distribution; no true
@@ -568,7 +611,7 @@ def median_sigma(
     sample = cells[rng.choice(cells.shape[0], k, replace=False)]
     # pairwise distances on the subsample (upper triangle)
     diff = sample[:, None, :] - sample[None, :, :]
-    d = np.sqrt(np.maximum((diff ** 2).sum(-1), 0))
+    d = np.sqrt(np.maximum((diff**2).sum(-1), 0))
     iu = np.triu_indices(k, k=1)
     return float(np.median(d[iu]))
 
@@ -593,8 +636,13 @@ def mean_embedding_heldout(
     from ..utils.validation import compute_roc_auc
 
     model = fit_mean_embedding(
-        train, sigma, embedding_kernel=embedding_kernel, embedding_sigma=embedding_sigma,
-        n_features=n_features, lambda_reg=lambda_reg, seed=seed,
+        train,
+        sigma,
+        embedding_kernel=embedding_kernel,
+        embedding_sigma=embedding_sigma,
+        n_features=n_features,
+        lambda_reg=lambda_reg,
+        seed=seed,
     )
     probs = mean_embedding_predict(model, test)
     y_te = labels_of(test)
@@ -626,18 +674,19 @@ def wasserstein_heldout(
     from ..utils.validation import compute_roc_auc
 
     sw = SlicedWassersteinDistance(n_projections=n_projections, p=p, seed=seed)
-    y_tr = labels_of(train); y_te = labels_of(test)
+    y_tr = labels_of(train)
+    y_te = labels_of(test)
 
     d_tr = np.asarray(sw.pairwise_distances_quantile(train, n_quantiles))  # (N, N)
     if sigma is None:
         sigma = float(estimate_sigma_from_distances(jnp.asarray(d_tr), 50.0))
 
-    k_tr = np.exp(-d_tr ** 2 / (2.0 * sigma ** 2))
+    k_tr = np.exp(-(d_tr**2) / (2.0 * sigma**2))
     klr = KernelLogisticRegression(lambda_reg=lambda_reg, tol=0.001)
     fit = klr.fit(jnp.asarray(k_tr), jnp.asarray(y_tr))
     alpha = np.asarray(fit.alpha)
 
     d_te = np.asarray(sw.cross_distances_quantile(test, train, n_quantiles))  # (Ntest, Ntrain)
-    k_te = np.exp(-d_te ** 2 / (2.0 * sigma ** 2))
+    k_te = np.exp(-(d_te**2) / (2.0 * sigma**2))
     probs = 1.0 / (1.0 + np.exp(-(k_te @ alpha)))
     return compute_roc_auc(probs, y_te), probs, y_te, sigma

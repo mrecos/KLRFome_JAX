@@ -17,22 +17,15 @@ from klrfome.data.formats import SampleCollection, TrainingData, RasterStack
 def simple_training_data():
     """Simple training data for prediction tests."""
     key = random.PRNGKey(42)
-    
+
     collections = []
     for i in range(3):
         samples = random.normal(key, (10, 2))
         key, _ = random.split(key)
-        coll = SampleCollection(
-            samples=samples,
-            label=1 if i < 2 else 0,
-            id=f"loc_{i}"
-        )
+        coll = SampleCollection(samples=samples, label=1 if i < 2 else 0, id=f"loc_{i}")
         collections.append(coll)
-    
-    return TrainingData(
-        collections=collections,
-        feature_names=["var1", "var2"]
-    )
+
+    return TrainingData(collections=collections, feature_names=["var1", "var2"])
 
 
 @pytest.fixture
@@ -42,17 +35,12 @@ def simple_raster_stack():
     height = 20
     width = 20
     data = jnp.array(np.random.rand(n_bands, height, width))
-    
+
     transform = from_bounds(0, 0, 1, 1, width, height)
     crs = "EPSG:4326"
     band_names = ["var1", "var2"]
-    
-    return RasterStack(
-        data=data,
-        transform=transform,
-        crs=crs,
-        band_names=band_names
-    )
+
+    return RasterStack(data=data, transform=transform, crs=crs, band_names=band_names)
 
 
 def test_focal_predictor_single_window(simple_training_data):
@@ -60,20 +48,20 @@ def test_focal_predictor_single_window(simple_training_data):
     # Create kernel and fit dummy alpha
     kernel = MeanEmbeddingKernel(RBFKernel(sigma=1.0))
     alpha = jnp.array([0.1, 0.2, 0.15])
-    
+
     predictor = FocalPredictor(
         distribution_kernel=kernel,
         klr_alpha=alpha,
         training_data=simple_training_data,
-        window_size=3
+        window_size=3,
     )
-    
+
     # Create dummy window samples
     key = random.PRNGKey(123)
     window_samples = random.normal(key, (9, 2))  # 3x3 window, 2 features
-    
+
     prob = predictor.predict_window(window_samples)
-    
+
     assert 0 <= prob <= 1
     assert isinstance(prob, (float, np.floating))
 
@@ -84,21 +72,17 @@ def test_focal_predictor_raster_shape(simple_training_data, simple_raster_stack)
     rff = RandomFourierFeatures(sigma=1.0, n_features=64, seed=42)
     kernel = MeanEmbeddingKernel(rff)
     alpha = jnp.array([0.1, 0.2, 0.15])
-    
+
     predictor = FocalPredictor(
         distribution_kernel=kernel,
         klr_alpha=alpha,
         training_data=simple_training_data,
-        window_size=3
+        window_size=3,
     )
-    
+
     # Predict on small raster
-    predictions = predictor.predict_raster(
-        simple_raster_stack,
-        batch_size=100,
-        show_progress=False
-    )
-    
+    predictions = predictor.predict_raster(simple_raster_stack, batch_size=100, show_progress=False)
+
     assert predictions.shape == (simple_raster_stack.height, simple_raster_stack.width)
     assert jnp.all((predictions >= 0) & (predictions <= 1))
 
@@ -115,14 +99,24 @@ def test_wasserstein_raster_predict_variable_size_bags():
     collections = []
     for i in range(4):
         n = 10 + i
-        collections.append(SampleCollection(random.normal(random.PRNGKey(i), (n, 2)) + 1.0, 1, f"s{i}"))
+        collections.append(
+            SampleCollection(random.normal(random.PRNGKey(i), (n, 2)) + 1.0, 1, f"s{i}")
+        )
     for i in range(4):
         n = 11 + i
-        collections.append(SampleCollection(random.normal(random.PRNGKey(50 + i), (n, 2)) - 1.0, 0, f"b{i}"))
+        collections.append(
+            SampleCollection(random.normal(random.PRNGKey(50 + i), (n, 2)) - 1.0, 0, f"b{i}")
+        )
     training_data = TrainingData(collections=collections, feature_names=["a", "b"])
 
-    model = KLRfome(kernel_type="wasserstein", n_projections=32, n_quantiles=64,
-                    window_size=3, lambda_reg=0.1, seed=0)
+    model = KLRfome(
+        kernel_type="wasserstein",
+        n_projections=32,
+        n_quantiles=64,
+        window_size=3,
+        lambda_reg=0.1,
+        seed=0,
+    )
     model.fit(training_data)
 
     raster = RasterStack(
@@ -134,4 +128,3 @@ def test_wasserstein_raster_predict_variable_size_bags():
     preds = model.predict(raster, show_progress=False)
     assert preds.shape == (8, 8)
     assert jnp.all((preds >= 0) & (preds <= 1))
-

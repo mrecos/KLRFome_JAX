@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KLRfome Section 6 comparison result",
+  "type": "object",
+  "required": ["schema_version", "configuration", "settings"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "configuration": {"type": "object"},
+    "settings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["data_audit", "fold_plan", "fold_results", "paired_differences"],
+        "properties": {
+          "data_audit": {"type": "object"},
+          "fold_plan": {"type": "object"},
+          "fold_results": {"type": "array"},
+          "paired_differences": {"type": "object"}
+        }
+      }
+    }
+  }
+}

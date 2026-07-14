@@ -1,213 +1,216 @@
-"""Kernel Logistic Regression implementation with IRLS solver."""
+"""Numerically stable dual kernel logistic regression."""
+
+from dataclasses import dataclass
+from typing import NamedTuple, Optional, Sequence, Tuple
+import warnings
 
 import jax.numpy as jnp
+import numpy as np
 from jax.scipy.linalg import solve
-from typing import Optional, NamedTuple
-from dataclasses import dataclass
-import warnings
 from jaxtyping import Array, Float
 
 
 class KLRFitResult(NamedTuple):
-    """Result of KLR fitting."""
-    alpha: Float[Array, "n"]  # Dual coefficients
+    """Fitted dual coefficients and explicit solver diagnostics."""
+
+    alpha: Float[Array, "n"]
     converged: bool
     n_iterations: int
     final_loss: float
+    failure_reason: Optional[str] = None
+    jitter_used: float = 0.0
 
 
 @dataclass
 class KernelLogisticRegression:
+    """Dual KLR fitted with the IRLS formulation used by the original R model.
+
+    The update solves ``(K + lambda * diag(1 / W)) alpha = z``.  Stable
+    sigmoid/cross-entropy calculations and bounded diagonal jitter make failure
+    observable without silently returning NaNs.
     """
-    Kernel Logistic Regression with IRLS solver.
-    
-    Fits the model:
-        P(y=1 | x) = σ(Σ_j α_j K(x, x_j))
-    
-    where σ is the sigmoid function and K is the kernel.
-    
-    Uses IRLS formulation: (K + λ·diag(1/W)) α = z
-    where W = diag(p * (1 - p)) is the diagonal weight matrix.
-    This matches the R implementation.
-    
-    Parameters:
-        lambda_reg: L2 regularization strength
-        max_iter: Maximum IRLS iterations
-        tol: Convergence tolerance for alpha (default: 0.01 to match R)
-        min_prob: Minimum probability to avoid numerical issues (clipping)
-    """
+
     lambda_reg: float = 1.0
     max_iter: int = 100
-    tol: float = 0.01  # Match R default tolerance
+    tol: float = 0.01
     min_prob: float = 1e-7
-    
+    jitter_schedule: Sequence[float] = (0.0, 1e-8, 1e-6, 1e-4)
+
+    def __post_init__(self) -> None:
+        if self.lambda_reg <= 0:
+            raise ValueError("lambda_reg must be positive")
+        if self.max_iter < 1:
+            raise ValueError("max_iter must be at least 1")
+        if self.tol <= 0:
+            raise ValueError("tol must be positive")
+        if not 0 < self.min_prob < 0.5:
+            raise ValueError("min_prob must be between 0 and 0.5")
+        if not self.jitter_schedule or any(value < 0 for value in self.jitter_schedule):
+            raise ValueError("jitter_schedule must contain nonnegative values")
+
     def fit(
         self,
         K: Float[Array, "n n"],
         y: Float[Array, "n"],
-        alpha_init: Optional[Float[Array, "n"]] = None
+        alpha_init: Optional[Float[Array, "n"]] = None,
     ) -> KLRFitResult:
-        """
-        Fit KLR model using IRLS.
-        
-        Uses the R formulation: (K + λ·diag(1/W)) α = z
-        where W = diag(p * (1 - p)) is the diagonal weight matrix.
-        
-        Parameters:
-            K: Precomputed kernel/similarity matrix
-            y: Binary labels (0 or 1)
-            alpha_init: Initial alpha values (default: uniform 1/N)
-        
-        Returns:
-            KLRFitResult with fitted coefficients and diagnostics
-        """
+        """Fit a precomputed, symmetric bag-level Gram matrix."""
+        K = jnp.asarray(K)
+        y = jnp.asarray(y, dtype=K.dtype)
         n = K.shape[0]
-        if K.shape[1] != n:
+        if K.ndim != 2 or K.shape[1] != n:
             raise ValueError("K must be square")
-        if len(y) != n:
-            raise ValueError("y must have same length as K dimensions")
-        
-        # Match R initialization: rep(1/N, N) instead of zeros
-        alpha = alpha_init if alpha_init is not None else jnp.ones(n) / n
-        
+        if y.ndim != 1 or len(y) != n:
+            raise ValueError("y must have the same length as K")
+        if n == 0:
+            raise ValueError("K and y must be nonempty")
+        if not np.isfinite(np.asarray(K)).all() or not np.isfinite(np.asarray(y)).all():
+            raise ValueError("K and y must be finite")
+        if not np.isin(np.asarray(y), (0, 1)).all():
+            raise ValueError("y must contain only 0 and 1")
+
+        alpha = (
+            jnp.asarray(alpha_init, dtype=K.dtype)
+            if alpha_init is not None
+            else jnp.ones(n, dtype=K.dtype) / n
+        )
+        if alpha.shape != (n,) or not np.isfinite(np.asarray(alpha)).all():
+            raise ValueError("alpha_init must be a finite vector of length n")
+
+        probability_floor = self._effective_min_prob(K.dtype)
+        maximum_jitter = 0.0
+
         for iteration in range(self.max_iter):
-            # Compute probabilities - match R exactly: pi <- 1 / (1 + exp(-Kalpha))
-            # R uses simple sigmoid WITHOUT any clipping
             eta = K @ alpha
-            # Match R exactly: spec <- 1 + exp(-Kalpha); pi <- 1 / spec
-            # R does NOT clip probabilities, so we don't either
-            prob = 1 / (1 + jnp.exp(-eta))
-            # NOTE: R doesn't clip probabilities. We only clip to avoid division by zero
-            # when computing W = prob * (1 - prob), not to change the actual prob values
-            # Use a much smaller epsilon that won't affect results
-            eps = 1e-15  # Machine epsilon level, won't change results
-            prob_safe = jnp.clip(prob, eps, 1 - eps)  # Only for W computation
-            
-            # IRLS weights (diagonal of W) - use prob_safe to avoid division by zero
-            # R: diagW <- pi * (1 - pi)
-            W = prob_safe * (1 - prob_safe)
-            
-            # Working response - use original prob for numerator to match R exactly
-            # R: z <- Kalpha + ((presence - pi) / diagW)
-            z = eta + (y - prob) / W
-            
-            # Weighted least squares update with regularization
-            # R formulation: (K + λ·diag(1/W)) α = z
-            # This matches the R implementation which uses weighted ridge regression
-            diagW_inv = 1.0 / W  # 1/diagW (inverse of diagonal weights)
-            lhs = K + self.lambda_reg * jnp.diag(diagW_inv)
-            rhs = z
-            
-            try:
-                alpha_new = solve(lhs, rhs, assume_a='pos')
-            except Exception as e:
-                warnings.warn(f"Error solving linear system at iteration {iteration}: {e}")
-                loss = self._compute_loss(K, y, alpha)
-                return KLRFitResult(alpha, False, iteration, loss)
-            
-            # Check for NaN (matching R's error handling)
-            if jnp.any(jnp.isnan(alpha_new)):
-                warnings.warn(f"NaN detected in alpha at iteration {iteration}")
-                loss = self._compute_loss(K, y, alpha)
-                return KLRFitResult(alpha, False, iteration, loss)
-            
-            # Check convergence - match R: all(abs(alphan - alpha) <= tol)
-            # R uses: all(abs(alphan - alpha) <= tol), not max
-            converged = jnp.all(jnp.abs(alpha_new - alpha) <= self.tol)
+            probability = self._sigmoid(eta)
+            probability_safe = jnp.clip(probability, probability_floor, 1.0 - probability_floor)
+            weights = probability_safe * (1.0 - probability_safe)
+            z = eta + (y - probability) / weights
+
+            if not self._all_finite(eta, probability, weights, z):
+                return self._failure(
+                    K,
+                    y,
+                    alpha,
+                    iteration,
+                    "nonfinite_irls_state",
+                    maximum_jitter,
+                )
+
+            lhs = K + self.lambda_reg * jnp.diag(1.0 / weights)
+            alpha_new, jitter_used = self._solve_with_jitter(lhs, z)
+            maximum_jitter = max(maximum_jitter, jitter_used)
+            if alpha_new is None:
+                return self._failure(
+                    K,
+                    y,
+                    alpha,
+                    iteration,
+                    "linear_solve_failed",
+                    maximum_jitter,
+                )
+
+            converged = bool(jnp.all(jnp.abs(alpha_new - alpha) <= self.tol))
             alpha = alpha_new
-            
             if converged:
                 loss = self._compute_loss(K, y, alpha)
-                return KLRFitResult(alpha, True, iteration + 1, loss)
-        
+                if not np.isfinite(loss):
+                    return self._failure(
+                        K,
+                        y,
+                        alpha,
+                        iteration + 1,
+                        "nonfinite_loss",
+                        maximum_jitter,
+                    )
+                return KLRFitResult(alpha, True, iteration + 1, loss, None, maximum_jitter)
+
         warnings.warn(f"KLR did not converge in {self.max_iter} iterations")
-        loss = self._compute_loss(K, y, alpha)
-        return KLRFitResult(alpha, False, self.max_iter, loss)
-    
+        return KLRFitResult(
+            alpha,
+            False,
+            self.max_iter,
+            self._compute_loss(K, y, alpha),
+            "maximum_iterations",
+            maximum_jitter,
+        )
+
+    def _solve_with_jitter(
+        self, lhs: Float[Array, "n n"], rhs: Float[Array, "n"]
+    ) -> Tuple[Optional[Float[Array, "n"]], float]:
+        scale = max(float(jnp.mean(jnp.abs(jnp.diag(lhs)))), 1.0)
+        identity = jnp.eye(lhs.shape[0], dtype=lhs.dtype)
+        for relative_jitter in self.jitter_schedule:
+            absolute_jitter = float(relative_jitter) * scale
+            try:
+                candidate = solve(
+                    lhs + absolute_jitter * identity,
+                    rhs,
+                    assume_a="pos",
+                )
+            except Exception:
+                continue
+            if not np.isfinite(np.asarray(candidate)).all():
+                continue
+            residual = (lhs + absolute_jitter * identity) @ candidate - rhs
+            denominator = max(float(jnp.linalg.norm(rhs)), 1.0)
+            relative_residual = float(jnp.linalg.norm(residual)) / denominator
+            if np.isfinite(relative_residual) and relative_residual <= 5e-3:
+                return candidate, absolute_jitter
+        return None, float(self.jitter_schedule[-1]) * scale
+
     def predict_proba(
-        self,
-        K_new: Float[Array, "m n"],
-        alpha: Float[Array, "n"]
+        self, K_new: Float[Array, "m n"], alpha: Float[Array, "n"]
     ) -> Float[Array, "m"]:
-        """
-        Predict probabilities for new data.
-        
-        Uses simple sigmoid to match R: pred <- 1 / (1 + exp(-eta))
-        
-        Parameters:
-            K_new: Kernel matrix between new points and training points
-                   Shape: (n_new, n_train)
-            alpha: Fitted dual coefficients
-        
-        Returns:
-            Predicted probabilities of class 1
-        """
-        eta = K_new @ alpha
-        # Match R exactly: 1 / (1 + exp(-eta))
-        # R uses simple sigmoid, not numerically stable version
-        return 1 / (1 + jnp.exp(-eta))
-    
+        """Predict class-one scores using a stable sigmoid."""
+        eta = jnp.asarray(K_new) @ jnp.asarray(alpha)
+        return self._sigmoid(eta)
+
     def predict(
         self,
         K_new: Float[Array, "m n"],
         alpha: Float[Array, "n"],
-        threshold: float = 0.5
+        threshold: float = 0.5,
     ) -> Float[Array, "m"]:
-        """
-        Predict binary labels.
-        
-        Parameters:
-            K_new: Kernel matrix between new points and training points
-            alpha: Fitted dual coefficients
-            threshold: Probability threshold for classification
-        
-        Returns:
-            Binary predictions (0 or 1)
-        """
-        proba = self.predict_proba(K_new, alpha)
-        return (proba >= threshold).astype(jnp.int32)
-    
+        return (self.predict_proba(K_new, alpha) >= threshold).astype(jnp.int32)
+
     @staticmethod
     def _sigmoid(x: Float[Array, "..."]) -> Float[Array, "..."]:
-        """
-        Numerically stable sigmoid.
-        
-        Parameters:
-            x: Input values
-        
-        Returns:
-            Sigmoid values
-        """
-        return jnp.where(
-            x >= 0,
-            1 / (1 + jnp.exp(-x)),
-            jnp.exp(x) / (1 + jnp.exp(x))
+        return jnp.asarray(jnp.where(x >= 0, 1 / (1 + jnp.exp(-x)), jnp.exp(x) / (1 + jnp.exp(x))))
+
+    def _effective_min_prob(self, dtype: jnp.dtype) -> float:
+        return max(float(self.min_prob), float(jnp.finfo(dtype).eps))
+
+    @staticmethod
+    def _all_finite(*arrays: Array) -> bool:
+        return all(np.isfinite(np.asarray(array)).all() for array in arrays)
+
+    def _failure(
+        self,
+        K: Float[Array, "n n"],
+        y: Float[Array, "n"],
+        alpha: Float[Array, "n"],
+        iteration: int,
+        reason: str,
+        jitter_used: float,
+    ) -> KLRFitResult:
+        warnings.warn(f"KLR stopped at iteration {iteration}: {reason}")
+        return KLRFitResult(
+            alpha,
+            False,
+            iteration,
+            self._compute_loss(K, y, alpha),
+            reason,
+            jitter_used,
         )
-    
+
     def _compute_loss(
         self,
         K: Float[Array, "n n"],
         y: Float[Array, "n"],
-        alpha: Float[Array, "n"]
+        alpha: Float[Array, "n"],
     ) -> float:
-        """
-        Compute regularized negative log-likelihood.
-        
-        Parameters:
-            K: Kernel matrix
-            y: Labels
-            alpha: Coefficients
-        
-        Returns:
-            Loss value
-        """
-        prob = self.predict_proba(K, alpha)
-        prob = jnp.clip(prob, self.min_prob, 1 - self.min_prob)
-        
-        # Negative log-likelihood
-        nll = -jnp.mean(y * jnp.log(prob) + (1 - y) * jnp.log(1 - prob))
-        # Regularization
-        reg = 0.5 * self.lambda_reg * alpha @ K @ alpha
-        
-        return float(nll + reg)
-
+        eta = K @ alpha
+        nll = jnp.mean(jnp.logaddexp(0.0, eta) - y * eta)
+        regularization = 0.5 * self.lambda_reg * alpha @ K @ alpha
+        return float(nll + regularization)

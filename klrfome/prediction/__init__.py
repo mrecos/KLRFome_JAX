@@ -3,4 +3,3 @@
 from .focal import FocalPredictor
 
 __all__ = ["FocalPredictor"]
-

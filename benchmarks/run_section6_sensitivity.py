@@ -14,7 +14,6 @@ presence-background relative suitability, not occurrence probabilities.
 """
 
 import argparse
-from dataclasses import dataclass
 import json
 from pathlib import Path
 import time
@@ -25,13 +24,14 @@ import numpy as np
 import pandas as pd
 from rasterio.transform import xy
 from shapely.geometry import Point
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 from klrfome.data.formats import Bag, BagDataset
 from klrfome.io.raster_source import RasterSource, build_spatial_background_bags
+from klrfome.models.baselines import (
+    BagSummaryClassifier,
+    bag_summary_matrix as bag_summary_matrix,
+    baseline_models,
+)
 from klrfome.utils.validation import FoldPlan
 
 if __package__:
@@ -68,108 +68,21 @@ BASELINE_CONFIGURATION = {
 }
 
 
-def bag_summary_matrix(dataset: BagDataset, summary: str = "mean") -> np.ndarray:
-    """Return one fixed-length summary vector per bag."""
-    means = np.asarray(
-        [np.asarray(bag.samples, dtype=float).mean(axis=0) for bag in dataset.collections]
-    )
-    if summary == "mean":
-        return means
-    if summary == "mean_std":
-        stds = np.asarray(
-            [np.asarray(bag.samples, dtype=float).std(axis=0) for bag in dataset.collections]
-        )
-        return np.column_stack([means, stds])
-    if summary == "geometry":
-        sizes = np.asarray([bag.n_samples for bag in dataset.collections], dtype=float)
-        diameters = np.asarray([_bag_diameter(bag) for bag in dataset.collections])
-        return np.column_stack([np.log1p(sizes), np.log1p(diameters)])
-    raise ValueError("summary must be 'mean', 'mean_std', or 'geometry'")
-
-
-@dataclass
-class FittedBagBaseline:
-    """A fitted classical estimator that accepts canonical bag datasets."""
-
-    name: str
-    summary: str
-    estimator: Any
-    fit_seconds: float
-    peak_python_memory_mb: float
-
-    def predict_bags(self, dataset: BagDataset) -> np.ndarray:
-        return np.asarray(
-            self.estimator.predict_proba(bag_summary_matrix(dataset, self.summary))[:, 1]
-        )
-
-
 def fit_baseline_models(
     dataset: BagDataset,
     seed: int = 42,
     include_diagnostics: bool = False,
     rf_estimators: int = 500,
-) -> Dict[str, FittedBagBaseline]:
+) -> Dict[str, BagSummaryClassifier]:
     """Fit mean-only LR/RF baselines and optional diagnostic controls."""
-    specifications: List[Tuple[str, str, Any]] = [
-        (
-            "LR-mean",
-            "mean",
-            make_pipeline(
-                StandardScaler(),
-                LogisticRegression(C=1.0, max_iter=5000, random_state=seed),
-            ),
-        ),
-        (
-            "RF-mean",
-            "mean",
-            RandomForestClassifier(
-                n_estimators=rf_estimators,
-                min_samples_leaf=5,
-                max_features="sqrt",
-                class_weight="balanced",
-                random_state=seed,
-                n_jobs=-1,
-            ),
-        ),
-    ]
-    if include_diagnostics:
-        specifications.extend(
-            [
-                (
-                    "LR-mean-std",
-                    "mean_std",
-                    make_pipeline(
-                        StandardScaler(),
-                        LogisticRegression(C=1.0, max_iter=5000, random_state=seed),
-                    ),
-                ),
-                (
-                    "NEG-geometry",
-                    "geometry",
-                    make_pipeline(
-                        StandardScaler(),
-                        LogisticRegression(C=1.0, max_iter=5000, random_state=seed),
-                    ),
-                ),
-            ]
-        )
-
-    labels = np.asarray(dataset.labels, dtype=int)
-    fitted = {}
-    for name, summary, estimator in specifications:
-        tracemalloc.start()
-        started = time.perf_counter()
-        estimator.fit(bag_summary_matrix(dataset, summary), labels)
-        fit_seconds = time.perf_counter() - started
-        _, peak_bytes = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-        fitted[name] = FittedBagBaseline(
-            name,
-            summary,
-            estimator,
-            fit_seconds=fit_seconds,
-            peak_python_memory_mb=peak_bytes / (1024**2),
-        )
+    fitted = baseline_models(
+        seed=seed,
+        rf_estimators=rf_estimators,
+        include_mean_std=include_diagnostics,
+        include_geometry=include_diagnostics,
+    )
+    for model in fitted.values():
+        model.fit(dataset)
     return fitted
 
 
@@ -185,14 +98,20 @@ def run_baseline_comparison(
     for assignment in plan.assignments:
         train = dataset.subset(assignment.train_indices)
         test = dataset.subset(assignment.test_indices)
-        models = fit_baseline_models(
-            train,
+        models = baseline_models(
             seed=seed,
-            include_diagnostics=include_diagnostics,
             rf_estimators=rf_estimators,
+            include_mean_std=include_diagnostics,
+            include_geometry=include_diagnostics,
         )
         labels = np.asarray(test.labels, dtype=int)
         for name, model in models.items():
+            tracemalloc.start()
+            fit_started = time.perf_counter()
+            model.fit(train)
+            fit_seconds = time.perf_counter() - fit_started
+            _, fit_peak_bytes = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
             tracemalloc.start()
             started = time.perf_counter()
             scores = model.predict_bags(test)
@@ -207,10 +126,10 @@ def run_baseline_comparison(
                     "n_train": train.n_locations,
                     "n_test": test.n_locations,
                     **fold_metrics(labels, scores),
-                    "fit_seconds": model.fit_seconds,
+                    "fit_seconds": fit_seconds,
                     "predict_seconds": predict_seconds,
                     "peak_python_memory_mb": max(
-                        model.peak_python_memory_mb,
+                        fit_peak_bytes / (1024**2),
                         prediction_peak_bytes / (1024**2),
                     ),
                     "summary": model.summary,

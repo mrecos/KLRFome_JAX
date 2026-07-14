@@ -37,11 +37,15 @@ jobs:
 
       - name: Check formatting
         if: matrix.python-version == '3.12'
-        run: python -m black --check klrfome tests examples benchmarks/run_section6_sensitivity.py
+        run: >-
+          python -m black --check klrfome tests examples
+          benchmarks/run_section6_sensitivity.py benchmarks/run_synthetic_methods_lab.py
 
       - name: Run Ruff
         if: matrix.python-version == '3.12'
-        run: python -m ruff check klrfome tests examples benchmarks/run_section6_sensitivity.py
+        run: >-
+          python -m ruff check klrfome tests examples
+          benchmarks/run_section6_sensitivity.py benchmarks/run_synthetic_methods_lab.py
 
       - name: Run Mypy
         if: matrix.python-version == '3.12'
@@ -50,3 +54,10 @@ jobs:
       - name: Execute README smoke workflow
         if: matrix.python-version == '3.12'
         run: python examples/readme_quickstart.py
+
+      - name: Execute synthetic laboratory smoke workflow
+        if: matrix.python-version == '3.12'
+        run: >-
+          python benchmarks/run_synthetic_methods_lab.py
+          --config benchmarks/synthetic_lab_smoke_config.json
+          --output /tmp/klrfome_synthetic_smoke.json

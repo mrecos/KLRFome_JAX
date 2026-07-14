@@ -2,6 +2,16 @@
 
 This directory contains scripts for validating and benchmarking the Python/JAX implementation against the R reference implementation.
 
+## Synthetic Methods Laboratory
+
+`run_synthetic_methods_lab.py` performs paired M0--M3 and LR/RF comparisons under controlled
+distribution shifts. Use `synthetic_lab_smoke_config.json` for a fast check and
+`synthetic_lab_config.json` for the research suite. The tracked result contract is
+`synthetic_lab_result_schema.json`; generated output is written under ignored `benchmark_data/`.
+
+See [Synthetic Methods Laboratory](../SYNTHETIC_METHODS_LAB.md) for scenario definitions,
+diagnostics, reproducibility behavior, and interpretation.
+
 ## Quick Validation (Recommended)
 
 The primary validation workflow uses shared data to ensure Python matches R exactly:

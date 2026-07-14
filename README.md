@@ -202,6 +202,8 @@ Open methodological decisions include:
 - [Methods status and roadmap](METHODS_ROADMAP_2026-07-13.md)
 - [Section 6 comparison summary](SECTION6_COMPARISON_SUMMARY_2026-07-13.md)
 - [Section 6 validation notebook](notebooks/05_section6_model_validation.ipynb)
+- [Synthetic methods laboratory](SYNTHETIC_METHODS_LAB.md)
+- [Synthetic methods notebook](notebooks/06_synthetic_methods_lab.ipynb)
 - [R-to-Python/JAX methodological comparison](COMPARISON_R_vs_JAX.md)
 - [Synthetic example data](example_data/README.md)
 

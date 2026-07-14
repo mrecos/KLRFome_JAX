@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KLRfome synthetic methods laboratory result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "configuration",
+    "configuration_sha256",
+    "environment",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "configuration": {"type": "object"},
+    "configuration_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "environment": {"type": "object"},
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "case_id",
+          "scenario",
+          "dataset_fingerprint",
+          "fold_plan",
+          "fold_results",
+          "paired_differences"
+        ],
+        "properties": {
+          "case_id": {"type": "string"},
+          "scenario": {"type": "object"},
+          "dataset_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "fold_plan": {"type": "object"},
+          "fold_results": {"type": "array"},
+          "paired_differences": {"type": "object"},
+          "invariance": {"type": ["object", "null"]}
+        }
+      }
+    }
+  }
+}

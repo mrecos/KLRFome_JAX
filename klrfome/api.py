@@ -265,11 +265,10 @@ class KLRfome:
         """
         if self._fit_result is None or self._core_model is None:
             raise RuntimeError("Model must be fit before prediction")
-        if self._training_data is None:
-            raise RuntimeError("Training data not available")
         if isinstance(raster_stack, list):
             raster_stack = RasterStack.from_files(raster_stack)
-        if raster_stack.band_names != self._training_data.feature_names:
+        feature_names = list(self._core_model.feature_names_ or ())
+        if raster_stack.band_names != feature_names:
             raise ValueError("Prediction raster band order differs from training features")
 
         from tqdm import tqdm
@@ -304,7 +303,7 @@ class KLRfome:
                     bags,
                     list(raster_stack.band_names),
                     crs=raster_stack.crs,
-                    study_design=self._training_data.study_design,
+                    study_design=self._core_model.study_design_ or "presence_background",
                 )
                 output[output_indices] = np.asarray(self._core_model.predict_bags(prediction_data))
         return jnp.asarray(output.reshape(raster_stack.height, raster_stack.width))

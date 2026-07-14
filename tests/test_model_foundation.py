@@ -156,13 +156,14 @@ def test_one_class_auc_is_reported_undefined():
 
 
 def test_legacy_api_maps_to_m1_and_serializes_primal_coefficients(tmp_path):
-    import pickle
-
     model = KLRfome(n_rff_features=16, seed=4).fit(_dataset())
     assert model._resolved_spec.method_id == "M1"
-    path = tmp_path / "model.pkl"
+    path = tmp_path / "model.klrfome"
     save_model(model, str(path))
-    with path.open("rb") as stream:
-        state = pickle.load(stream)
-    assert state["coefficient_space"] == "primal"
-    assert np.isfinite(np.asarray(state["coefficients"])).all()
+    from klrfome.utils.serialization import load_model
+
+    restored = load_model(str(path))
+    assert isinstance(restored, KLRfome)
+    assert restored._core_model is not None
+    assert restored._core_model.spec.method_id == "M1"
+    assert np.isfinite(np.asarray(restored._core_model.fit_result_.coefficients)).all()

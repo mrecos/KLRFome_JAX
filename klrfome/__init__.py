@@ -8,6 +8,8 @@ __version__ = "0.1.0"
 
 # Core data structures
 from .data.formats import (
+    Bag,
+    BagDataset,
     SampleCollection,
     TrainingData,
     RasterStack,
@@ -28,6 +30,9 @@ from .models.klr import (
     KernelLogisticRegression,
     KLRFitResult,
 )
+from .models.primal import PrimalFitResult, PrimalLogisticRegression
+from .models.spec import ModelSpec
+from .models.distribution import DistributionClassifier
 
 # Prediction
 from .prediction.focal import FocalPredictor, WassersteinFocalPredictor
@@ -39,6 +44,8 @@ __all__ = [
     # Version
     "__version__",
     # Data structures
+    "Bag",
+    "BagDataset",
     "SampleCollection",
     "TrainingData",
     "RasterStack",
@@ -52,10 +59,13 @@ __all__ = [
     # Models
     "KernelLogisticRegression",
     "KLRFitResult",
+    "PrimalLogisticRegression",
+    "PrimalFitResult",
+    "ModelSpec",
+    "DistributionClassifier",
     # Prediction
     "FocalPredictor",
     "WassersteinFocalPredictor",
     # High-level API
     "KLRfome",
 ]
-

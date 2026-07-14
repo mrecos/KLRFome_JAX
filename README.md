@@ -17,6 +17,9 @@
 **Documentation**: [mrecos.github.io/klrfome](https://mrecos.github.io/klrfome/)  
 **Paper**: Harris, M.D. (2019). KLRfome - Kernel Logistic Regression on Focal Mean Embeddings. *Journal of Open Source Software*, 4(35), 722.
 
+**Current model/data contract**: [MODEL_DATA_FOUNDATION.md](MODEL_DATA_FOUNDATION.md)
+**Dated methods roadmap**: [METHODS_ROADMAP_2026-07-13.md](METHODS_ROADMAP_2026-07-13.md)
+
 ---
 
 ## The Problem: Distribution Regression
@@ -61,7 +64,7 @@ KLRfome is designed for problems where:
 
 1. **Represent** each location as a collection ("bag") of environmental feature vectors sampled from within its boundary
 2. **Compute similarity** between locations using mean embeddings in a Reproducing Kernel Hilbert Space (RKHS)
-3. **Fit** Kernel Logistic Regression on the resulting similarity matrix
+3. **Fit** either primal logistic regression on an explicit embedding or dual Kernel Logistic Regression on a bag-level similarity matrix
 4. **Predict** across the landscape using focal windows that compute similarity between each neighborhood and the training locations
 
 The name derives from this approach: **K**ernel **L**ogistic **R**egression on **FO**cal **M**ean **E**mbeddings (**KLRfome**, pronounced *"clear foam"*).
@@ -134,7 +137,8 @@ training_data = model.prepare_data(
 # Fit the model
 model.fit(training_data)
 
-# Predict probability surface across the landscape
+# Predict a score surface across the landscape. With presence-background data,
+# interpret this as relative suitability rather than occurrence probability.
 predictions = model.predict(raster_stack)
 print(f"Predictions shape: {predictions.shape}")
 print(f"Probability range: [{predictions.min():.3f}, {predictions.max():.3f}]")

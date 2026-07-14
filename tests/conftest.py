@@ -1,9 +1,7 @@
 """Shared fixtures for tests."""
 
 import pytest
-import jax.numpy as jnp
 import jax.random as random
-import numpy as np
 
 from klrfome.data.formats import SampleCollection, TrainingData
 from klrfome.kernels.rbf import RBFKernel
@@ -30,29 +28,21 @@ def sample_collections():
     """Sample collections for testing."""
     key = random.PRNGKey(123)
     collections = []
-    
+
     # Create 3 site collections
     for i in range(3):
         samples = random.normal(key, (20, 5))
         key, _ = random.split(key)
-        coll = SampleCollection(
-            samples=samples,
-            label=1,
-            id=f"site_{i}"
-        )
+        coll = SampleCollection(samples=samples, label=1, id=f"site_{i}")
         collections.append(coll)
-    
+
     # Create 2 background collections
     for i in range(2):
         samples = random.normal(key, (15, 5))
         key, _ = random.split(key)
-        coll = SampleCollection(
-            samples=samples,
-            label=0,
-            id=f"background_{i}"
-        )
+        coll = SampleCollection(samples=samples, label=0, id=f"background_{i}")
         collections.append(coll)
-    
+
     return collections
 
 
@@ -62,7 +52,7 @@ def training_data(sample_collections):
     return TrainingData(
         collections=sample_collections,
         feature_names=[f"var_{i}" for i in range(5)],
-        crs="EPSG:4326"
+        crs="EPSG:4326",
     )
 
 
@@ -76,4 +66,3 @@ def rbf_kernel():
 def rff_kernel():
     """Random Fourier Features kernel for testing."""
     return RandomFourierFeatures(sigma=1.0, n_features=128, seed=42)
-

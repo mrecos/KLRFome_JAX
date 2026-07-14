@@ -6,18 +6,25 @@ import pytest
 
 from klrfome.data.formats import SampleCollection
 from klrfome.data.tabular import (
-    fit_mean_embedding, mean_embedding_predict, mean_embedding_heldout,
-    predict_xy_surface, labels_of,
+    fit_mean_embedding,
+    mean_embedding_predict,
+    mean_embedding_heldout,
+    predict_xy_surface,
 )
 
 
 def _toy_bags(n_per=6, m=12, d=4, sep=1.0, seed=0):
-    rng = random.PRNGKey(seed)
     bags = []
     for i in range(n_per):
-        bags.append(SampleCollection(random.normal(random.PRNGKey(seed + i), (m, d)) + sep, 1, f"s{i}"))
+        bags.append(
+            SampleCollection(random.normal(random.PRNGKey(seed + i), (m, d)) + sep, 1, f"s{i}")
+        )
     for i in range(n_per):
-        bags.append(SampleCollection(random.normal(random.PRNGKey(seed + 100 + i), (m, d)) - sep, 0, f"b{i}"))
+        bags.append(
+            SampleCollection(
+                random.normal(random.PRNGKey(seed + 100 + i), (m, d)) - sep, 0, f"b{i}"
+            )
+        )
     return bags
 
 

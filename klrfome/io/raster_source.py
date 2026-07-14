@@ -307,14 +307,29 @@ def build_spatial_background_bags(
     cap_cells: int = 120,
     seed: int = 42,
     stratum_id: Optional[str] = None,
+    match_sizes_exactly: bool = False,
 ) -> List[Bag]:
-    """Build spatial bags around uniform valid anchors, matching site bag sizes."""
+    """Build spatial bags around uniform valid anchors, matching site bag sizes.
+
+    By default target sizes are a bootstrap sample from the retained site-bag
+    sizes.  ``match_sizes_exactly=True`` uses a permutation when the class counts
+    are equal, which is useful as a finite-sample sensitivity control without
+    changing the established default background design.
+    """
     if not site_bags:
         raise ValueError("site_bags must be nonempty")
     n_background = n_background or len(site_bags)
     rng = np.random.default_rng(seed)
     sizes = np.asarray([min(bag.n_samples, cap_cells) for bag in site_bags], dtype=int)
-    target_sizes = rng.choice(sizes, n_background, replace=True)
+    if match_sizes_exactly:
+        if n_background != len(site_bags):
+            raise ValueError(
+                "Exact size matching requires n_background to equal the number of site bags"
+            )
+        template_indices = rng.permutation(len(site_bags))
+    else:
+        template_indices = rng.choice(len(site_bags), n_background, replace=True)
+    target_sizes = sizes[template_indices]
     occupied: Set[CellIndex] = set()
     for bag in site_bags:
         for row_value, col_value in (bag.metadata or {}).get("cell_indices", []):
@@ -370,6 +385,8 @@ def build_spatial_background_bags(
                     "adapter": "raster_background",
                     "anchor_cell": [anchor_row, anchor_col],
                     "cell_indices": np.column_stack([rows, cols]).tolist(),
+                    "size_template_id": site_bags[int(template_indices[len(backgrounds)])].id,
+                    "size_matching": "exact_permutation" if match_sizes_exactly else "bootstrap",
                     "feature_names": source_names,
                     "crs": source.crs,
                 },

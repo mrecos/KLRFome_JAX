@@ -99,3 +99,28 @@ def test_background_bags_match_sizes_and_never_overlap_sites(raster_source):
     assert [bag.n_samples for bag in backgrounds] == [min(site.n_samples, 4)] * 2
     for bag in backgrounds:
         assert not site_cells & {tuple(cell) for cell in bag.metadata["cell_indices"]}
+
+
+def test_background_bags_can_match_site_sizes_exactly(raster_source):
+    small = raster_source.extract_geometry(box(0, 4, 2, 6), "small", 1)
+    large = raster_source.extract_geometry(box(2, 0, 6, 2), "large", 1)
+    backgrounds = build_spatial_background_bags(
+        raster_source,
+        [small, large],
+        n_background=2,
+        cap_cells=20,
+        seed=3,
+        match_sizes_exactly=True,
+    )
+    assert sorted(bag.n_samples for bag in backgrounds) == sorted(
+        [small.n_samples, large.n_samples]
+    )
+    assert {bag.metadata["size_matching"] for bag in backgrounds} == {"exact_permutation"}
+
+    with pytest.raises(ValueError, match="n_background"):
+        build_spatial_background_bags(
+            raster_source,
+            [small, large],
+            n_background=3,
+            match_sizes_exactly=True,
+        )

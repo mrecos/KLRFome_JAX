@@ -17,8 +17,9 @@
 **Documentation**: [mrecos.github.io/klrfome](https://mrecos.github.io/klrfome/)  
 **Paper**: Harris, M.D. (2019). KLRfome - Kernel Logistic Regression on Focal Mean Embeddings. *Journal of Open Source Software*, 4(35), 722.
 
-**Current model/data contract**: [MODEL_DATA_FOUNDATION.md](MODEL_DATA_FOUNDATION.md)
-**Dated methods roadmap**: [METHODS_ROADMAP_2026-07-13.md](METHODS_ROADMAP_2026-07-13.md)
+- **Current model/data contract**: [MODEL_DATA_FOUNDATION.md](MODEL_DATA_FOUNDATION.md)
+- **Dated methods roadmap**: [METHODS_ROADMAP_2026-07-13.md](METHODS_ROADMAP_2026-07-13.md)
+- **Section 6 validation notebook**: [notebooks/05_section6_model_validation.ipynb](notebooks/05_section6_model_validation.ipynb)
 
 ---
 

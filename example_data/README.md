@@ -1,41 +1,30 @@
-# Example Data
+# Synthetic example data
 
-This folder contains synthetic example data for testing KLRfome.
+This directory contains a deterministic, self-contained dataset for the KLRfome README workflow
+and automated smoke tests.
 
 ## Files
 
-- `var1.tif`, `var2.tif`, `var3.tif` - Environmental variable rasters (200x200 pixels)
-- `sites.geojson` - 25 simulated site point locations
-- `metadata.json` - Dataset metadata
+- `var1.tif`, `var2.tif`, and `var3.tif`: three aligned 200 × 200 environmental rasters;
+- `sites.geojson`: 25 simulated site points; and
+- `metadata.json`: generation settings, extent, CRS, and random seed.
 
-## Data Description
+The rasters contain spatially autocorrelated synthetic variables. Site locations were generated
+with a learnable environmental association. The data demonstrate software behavior only and are
+not evidence for selecting among M0–M3.
 
-The rasters represent synthetic environmental variables with spatial autocorrelation.
-Site locations were placed preferentially in areas with specific environmental characteristics,
-creating a learnable signal for the model.
+Run the CI-sized end-to-end workflow from the repository root:
 
-## Usage
-
-See the Quick Start section in the main README.md or run `notebooks/01_quickstart.ipynb`.
-
-```python
-from klrfome import KLRfome, RasterStack
-import geopandas as gpd
-
-# Load example data
-raster_stack = RasterStack.from_files([
-    'example_data/var1.tif',
-    'example_data/var2.tif', 
-    'example_data/var3.tif'
-])
-sites = gpd.read_file('example_data/sites.geojson')
-
-# Fit model
-model = KLRfome(sigma=0.5, lambda_reg=0.1, window_size=5)
-training_data = model.prepare_data(raster_stack, sites, n_background=50)
-model.fit(training_data)
-
-# Predict
-predictions = model.predict(raster_stack)
+```bash
+python examples/readme_quickstart.py
 ```
 
+Run focal prediction over the complete example extent with:
+
+```bash
+python examples/readme_quickstart.py --full-surface
+```
+
+The fitted example is a presence-background design, so its output is a relative-suitability
+surface rather than an occurrence-probability surface. See the main [README](../README.md) and
+[model/data foundation](../MODEL_DATA_FOUNDATION.md) for the current API and interpretation.

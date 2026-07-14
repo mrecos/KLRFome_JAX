@@ -68,3 +68,18 @@ Thumbs.db
 
 # User data (local site data for analysis)
 site_data/
+
+# Generated benchmark and diagnostic artifacts
+benchmark_data/
+benchmark_data_*/
+diagnostic_output/
+benchmark_*_results.json
+benchmark_report.txt
+r_results.json
+klrfome_prediction_map.png
+
+# Local reference/archive material and one-off exploratory artifacts
+klrfome_R/
+img/
+diagnose_buffer.py
+notebooks/verify_test_data.py

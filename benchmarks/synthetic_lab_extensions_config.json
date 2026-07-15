@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0",
+  "suite": "representation-extensions",
+  "seed": 42,
+  "n_bags_per_class": 24,
+  "n_features": 4,
+  "bag_size": 30,
+  "replicates": 1,
+  "n_splits": 4,
+  "n_repeats": 1,
+  "inner_splits": 3,
+  "reference_bag_size": 1000,
+  "lambda_reg": 0.1,
+  "rf_estimators": 200,
+  "include_baselines": true,
+  "include_mean_std_baseline": true,
+  "run_invariance_checks": false,
+  "methods": [
+    {"id": "M0", "method": "M0"},
+    {"id": "M1-iid128", "method": "M1", "rff_features": 128},
+    {
+      "id": "M1-orf128",
+      "method": "M1",
+      "rff_features": 128,
+      "rff_scheme": "orthogonal"
+    },
+    {"id": "M1-iid512", "method": "M1", "rff_features": 512},
+    {
+      "id": "M1-orf128-shrink",
+      "method": "M1",
+      "rff_features": 128,
+      "rff_scheme": "orthogonal",
+      "embedding_estimator": "shrinkage"
+    },
+    {"id": "M2-iid128", "method": "M2", "rff_features": 128},
+    {
+      "id": "M2-orf128",
+      "method": "M2",
+      "rff_features": 128,
+      "rff_scheme": "orthogonal"
+    },
+    {"id": "M3", "method": "M3", "n_projections": 64, "n_quantiles": 64},
+    {
+      "id": "M4",
+      "method": "M4",
+      "rff_features": 128,
+      "rff_scheme": "orthogonal",
+      "n_projections": 64,
+      "n_quantiles": 64,
+      "hybrid_weights": [0.0, 0.5, 1.0]
+    }
+  ],
+  "scenarios": [
+    {"scenario": "null", "effect_sizes": [0.0], "replicates": 20},
+    {
+      "scenario": "moment_matched_xor",
+      "effect_sizes": [0.85, 0.95],
+      "n_features": 2,
+      "n_signal_features": 2,
+      "bag_size": 120,
+      "replicates": 6
+    },
+    {
+      "scenario": "mean_shift",
+      "effect_sizes": [0.25],
+      "bag_sizes": [3, 5, 10, 30],
+      "replicates": 5
+    },
+    {
+      "scenario": "mean_shift",
+      "effect_sizes": [0.25],
+      "spatial_ranges": [1.5, 5.0],
+      "replicates": 5
+    },
+    {
+      "scenario": "mean_shift",
+      "effect_sizes": [0.25],
+      "unequal_bag_sizes": true,
+      "min_bag_size": 3,
+      "max_bag_size": 30,
+      "replicates": 5
+    },
+    {
+      "scenario": "sparse_signal",
+      "effect_sizes": [0.15, 0.30],
+      "n_features": 30,
+      "replicates": 5
+    },
+    {
+      "scenario": "sparse_signal",
+      "effect_sizes": [0.30],
+      "n_features": 60,
+      "replicates": 5
+    },
+    {"scenario": "variance_shift", "effect_sizes": [0.35], "replicates": 4},
+    {
+      "scenario": "correlation_shift",
+      "effect_sizes": [0.35],
+      "n_features": 4,
+      "replicates": 4
+    }
+  ],
+  "output": "benchmark_data/synthetic_lab_extensions_results.json"
+}

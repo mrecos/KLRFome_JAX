@@ -4,15 +4,20 @@ This directory contains scripts for validating and benchmarking the Python/JAX i
 
 ## Synthetic Methods Laboratory
 
-`run_synthetic_methods_lab.py` performs paired M0--M3 and LR/RF comparisons under controlled
+`run_synthetic_methods_lab.py` performs paired M0--M4 and LR/RF comparisons under controlled
 distribution shifts. Use `synthetic_lab_smoke_config.json` for a fast check and
 `synthetic_lab_config.json` for the research suite. The tracked result contract is
 `synthetic_lab_result_schema.json`; generated output is written under ignored `benchmark_data/`.
 
 `synthetic_lab_targeted_v2_config.json` follows the core run with weaker nuisance signals,
 more independent replicates, corrected spatial dependence, a moment-matched nonlinear XOR
-scenario, and harder sparse-signal cases. Result schema 1.1 pools all held-out predictions within
+scenario, and harder sparse-signal cases. Result schema 1.2 pools all held-out predictions within
 each repeat before computing Boyce, lift, AUC, and PR AUC.
+
+`synthetic_lab_extensions_smoke_config.json` is the execution gate for orthogonal random features,
+shrinkage embeddings, population-reference error, and nested M4 hybrid-weight selection. After it
+passes, `synthetic_lab_extensions_config.json` runs the replicated research design. M4 tuning uses
+grouped inner folds drawn only from each outer training fold.
 
 See [Synthetic Methods Laboratory](../SYNTHETIC_METHODS_LAB.md) for scenario definitions,
 diagnostics, reproducibility behavior, and interpretation.

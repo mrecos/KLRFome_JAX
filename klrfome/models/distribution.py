@@ -1,4 +1,4 @@
-"""Unified M0--M3 estimators operating on canonical bag datasets."""
+"""Unified M0--M4 estimators operating on canonical bag datasets."""
 
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -49,8 +49,8 @@ def _exact_kme_block(
 class DistributionClassifier:
     """Fit one validated distribution-regression architecture.
 
-    ``sigma`` is the point-level RBF bandwidth for M0--M2. ``decision_sigma``
-    is the bag-level RBF bandwidth for M2--M3. Each can be estimated using only
+    ``sigma`` is the point-level RBF bandwidth for M0--M2 and M4. ``decision_sigma``
+    is the bag-level RBF bandwidth for M2--M4. Each can be estimated using only
     the data passed to :meth:`fit`.
     """
 
@@ -71,6 +71,9 @@ class DistributionClassifier:
     training_data_: Optional[BagDataset] = field(default=None, init=False)
     gram_matrix_: Optional[Float[Array, "n n"]] = field(default=None, init=False)
     training_embeddings_: Optional[Float[Array, "n d"]] = field(default=None, init=False)
+    training_shrinkage_factors_: Optional[Float[Array, "n"]] = field(default=None, init=False)
+    hybrid_mean_scale_: Optional[float] = field(default=None, init=False)
+    hybrid_transport_scale_: Optional[float] = field(default=None, init=False)
     point_sigma_: Optional[float] = field(default=None, init=False)
     decision_sigma_: Optional[float] = field(default=None, init=False)
     feature_names_: Optional[Tuple[str, ...]] = field(default=None, init=False)
@@ -100,7 +103,7 @@ class DistributionClassifier:
         self.training_data_ = fitted_data
         labels = fitted_data.labels
 
-        if self.spec.representation in ("exact_kme", "rff_kme"):
+        if self.spec.representation in ("exact_kme", "rff_kme", "hybrid"):
             self.point_sigma_ = (
                 self._median_cell_distance(fitted_data) if self.auto_sigma else float(self.sigma)
             )
@@ -120,9 +123,11 @@ class DistributionClassifier:
                 sigma=self.point_sigma_,
                 n_features=self.spec.rff_features,
                 seed=self.seed,
+                scheme=self.spec.rff_scheme,
             )
-            embeddings = self._embed_rff(fitted_data.collections)
+            embeddings, shrinkage_factors = self._embed_rff(fitted_data.collections)
             self.training_embeddings_ = embeddings
+            self.training_shrinkage_factors_ = shrinkage_factors
             if self.spec.solver == "primal_logistic":
                 solver = PrimalLogisticRegression(
                     lambda_reg=self.lambda_reg, max_iter=self.max_iter, tol=self.tol
@@ -133,7 +138,7 @@ class DistributionClassifier:
                 self.decision_sigma_ = self._resolve_decision_sigma(embeddings)
                 gram = self._rbf_matrix(embeddings, embeddings, self.decision_sigma_)
                 self._fit_dual(gram, labels)
-        else:
+        elif self.spec.representation == "sliced_wasserstein":
             self._sw = SlicedWassersteinDistance(
                 n_projections=self.spec.n_projections,
                 p=2,
@@ -145,6 +150,8 @@ class DistributionClassifier:
             self.decision_sigma_ = self._resolve_distance_sigma(distances)
             gram = jnp.exp(-(distances**2) / (2.0 * self.decision_sigma_**2))
             self._fit_dual(gram, labels)
+        else:
+            self._fit_hybrid(fitted_data, labels)
 
         if self.fit_result_ is None:
             raise RuntimeError("Internal error: fit did not produce a result")
@@ -157,6 +164,29 @@ class DistributionClassifier:
             "point_sigma": self.point_sigma_,
             "decision_sigma": self.decision_sigma_,
             "constructed_gram_matrix": self.gram_matrix_ is not None,
+            "rff_scheme": self.spec.rff_scheme if self._rff is not None else None,
+            "embedding_estimator": self.spec.embedding_estimator,
+            "shrinkage_effective_size": self.spec.shrinkage_effective_size,
+            "mean_shrinkage_factor": (
+                float(jnp.mean(self.training_shrinkage_factors_))
+                if self.training_shrinkage_factors_ is not None
+                else None
+            ),
+            "minimum_shrinkage_factor": (
+                float(jnp.min(self.training_shrinkage_factors_))
+                if self.training_shrinkage_factors_ is not None
+                else None
+            ),
+            "hybrid_weight": (
+                self.spec.hybrid_weight if self.spec.representation == "hybrid" else None
+            ),
+            "hybrid_mean_representation": (
+                self.spec.hybrid_mean_representation
+                if self.spec.representation == "hybrid"
+                else None
+            ),
+            "hybrid_mean_scale": self.hybrid_mean_scale_,
+            "hybrid_transport_scale": self.hybrid_transport_scale_,
         }
         return self
 
@@ -182,7 +212,7 @@ class DistributionClassifier:
             )
 
         if self.spec.representation == "rff_kme":
-            embeddings = self._embed_rff(prediction_data.collections)
+            embeddings, _ = self._embed_rff(prediction_data.collections)
             if self.spec.solver == "primal_logistic":
                 assert isinstance(self.fit_result_, PrimalFitResult)
                 return PrimalLogisticRegression.predict_proba(
@@ -190,7 +220,7 @@ class DistributionClassifier:
                 )
             assert self.training_embeddings_ is not None and self.decision_sigma_ is not None
             cross = self._rbf_matrix(embeddings, self.training_embeddings_, self.decision_sigma_)
-        else:
+        elif self.spec.representation == "sliced_wasserstein":
             if self.training_data_ is None:
                 raise RuntimeError("Sliced-Wasserstein prediction requires reference training bags")
             assert self._sw is not None and self.decision_sigma_ is not None
@@ -200,6 +230,8 @@ class DistributionClassifier:
                 self.spec.n_quantiles,
             )
             cross = jnp.exp(-(distances**2) / (2.0 * self.decision_sigma_**2))
+        else:
+            cross = self._hybrid_cross(prediction_data)
 
         assert isinstance(self.fit_result_, KLRFitResult)
         return KernelLogisticRegression.predict_proba(
@@ -213,11 +245,151 @@ class DistributionClassifier:
         )
         self.fit_result_ = solver.fit(gram, labels)
 
-    def _embed_rff(self, bags: List[Bag]) -> Float[Array, "n d"]:
+    def _fit_hybrid(self, dataset: BagDataset, labels: Float[Array, "n"]) -> None:
+        """Fit the experimental convex mean/transport kernel combination."""
+        assert self.point_sigma_ is not None
+        if self.spec.hybrid_mean_representation == "exact_kme":
+            self._mean_kernel = MeanEmbeddingKernel(RBFKernel(self.point_sigma_))
+            mean_gram = self._exact_kme_matrix(dataset.collections, dataset.collections)
+            mean_gram = (mean_gram + mean_gram.T) / 2.0
+        else:
+            self._rff = RandomFourierFeatures(
+                sigma=self.point_sigma_,
+                n_features=self.spec.rff_features,
+                seed=self.seed,
+                scheme=self.spec.rff_scheme,
+            )
+            embeddings, shrinkage_factors = self._embed_rff(dataset.collections)
+            self.training_embeddings_ = embeddings
+            self.training_shrinkage_factors_ = shrinkage_factors
+            mean_gram = embeddings @ embeddings.T
+
+        self._sw = SlicedWassersteinDistance(
+            n_projections=self.spec.n_projections,
+            p=2,
+            seed=self.seed,
+        )
+        distances = self._sw.pairwise_distances_quantile(dataset.collections, self.spec.n_quantiles)
+        self.decision_sigma_ = self._resolve_distance_sigma(distances)
+        transport_gram = jnp.exp(-(distances**2) / (2.0 * self.decision_sigma_**2))
+
+        self.hybrid_mean_scale_ = self._component_scale(mean_gram)
+        self.hybrid_transport_scale_ = self._component_scale(transport_gram)
+        if self.spec.hybrid_normalize:
+            mean_gram = mean_gram / self.hybrid_mean_scale_
+            transport_gram = transport_gram / self.hybrid_transport_scale_
+        weight = self.spec.hybrid_weight
+        gram = weight * mean_gram + (1.0 - weight) * transport_gram
+        gram = (gram + gram.T) / 2.0
+        self._fit_dual(gram, labels)
+
+    def _hybrid_cross(self, prediction_data: BagDataset) -> Float[Array, "n m"]:
+        if self.training_data_ is None or self._sw is None or self.decision_sigma_ is None:
+            raise RuntimeError(
+                "Hybrid prediction requires fitted reference bags and transport state"
+            )
+        if self.spec.hybrid_mean_representation == "exact_kme":
+            mean_cross = self._exact_kme_matrix(
+                prediction_data.collections, self.training_data_.collections
+            )
+        else:
+            if self.training_embeddings_ is None:
+                raise RuntimeError("Hybrid RFF prediction requires training embeddings")
+            embeddings, _ = self._embed_rff(prediction_data.collections)
+            mean_cross = embeddings @ self.training_embeddings_.T
+
+        distances = self._sw.cross_distances_quantile(
+            prediction_data.collections,
+            self.training_data_.collections,
+            self.spec.n_quantiles,
+        )
+        transport_cross = jnp.exp(-(distances**2) / (2.0 * self.decision_sigma_**2))
+        if self.spec.hybrid_normalize:
+            if self.hybrid_mean_scale_ is None or self.hybrid_transport_scale_ is None:
+                raise RuntimeError("Hybrid component scales are unavailable")
+            mean_cross = mean_cross / self.hybrid_mean_scale_
+            transport_cross = transport_cross / self.hybrid_transport_scale_
+        weight = self.spec.hybrid_weight
+        return weight * mean_cross + (1.0 - weight) * transport_cross
+
+    @staticmethod
+    def _component_scale(gram: Float[Array, "n n"]) -> float:
+        scale = float(jnp.mean(jnp.diag(gram)))
+        return scale if np.isfinite(scale) and scale > 1e-12 else 1.0
+
+    def embedding_vectors(
+        self, dataset: BagDataset, apply_shrinkage: bool = True
+    ) -> Float[Array, "n d"]:
+        """Return fitted RFF bag embeddings for research diagnostics.
+
+        ``apply_shrinkage=False`` exposes the empirical feature mean used as a
+        population-reference target when the supplied bags are very large.
+        """
+        if self.fit_result_ is None or self._rff is None:
+            raise RuntimeError("A fitted RFF-based model is required")
+        if self.feature_names_ is None or tuple(dataset.feature_names) != self.feature_names_:
+            raise ValueError("Embedding feature order differs from the fitted model")
+        transformed = self.preprocessor_.transform(dataset) if self.preprocessor_ else dataset
+        embeddings, _ = self._embed_rff(transformed.collections, apply_shrinkage=apply_shrinkage)
+        return embeddings
+
+    def _embed_rff(
+        self, bags: List[Bag], apply_shrinkage: bool = True
+    ) -> Tuple[Float[Array, "n d"], Float[Array, "n"]]:
         if self._rff is None:
             raise RuntimeError("RFF representation is not initialized")
         self._rff._initialize_weights(bags[0].n_features)
-        return jnp.stack([jnp.mean(self._rff.feature_map(bag.samples), axis=0) for bag in bags])
+        embeddings = []
+        factors = []
+        for bag in bags:
+            mapped = self._rff.feature_map(bag.samples)
+            empirical = jnp.mean(mapped, axis=0)
+            factor = self._rff_shrinkage_factor(bag, mapped, empirical) if apply_shrinkage else 1.0
+            embeddings.append(empirical * factor)
+            factors.append(factor)
+        return jnp.stack(embeddings), jnp.asarray(factors)
+
+    def _rff_shrinkage_factor(
+        self,
+        bag: Bag,
+        mapped: Float[Array, "n d"],
+        empirical: Float[Array, "d"],
+    ) -> float:
+        if self.spec.embedding_estimator == "empirical":
+            return 1.0
+
+        unique_source = np.asarray(bag.samples)
+        if bag.coordinates is not None:
+            unique_source = np.asarray(bag.coordinates)
+        _, unique_indices = np.unique(unique_source, axis=0, return_index=True)
+        unique_indices = np.sort(unique_indices)
+        unique_mapped = np.asarray(mapped)[unique_indices]
+        unique_count = len(unique_mapped)
+        if unique_count <= 1:
+            return 0.0
+
+        effective_size = float(unique_count)
+        if self.spec.shrinkage_effective_size == "metadata":
+            metadata_value = (bag.metadata or {}).get("effective_sample_size")
+            if metadata_value is None:
+                raise ValueError(
+                    f"Bag {bag.id!r} requires metadata['effective_sample_size'] for shrinkage"
+                )
+            effective_size = float(metadata_value)
+            if not np.isfinite(effective_size) or not 1.0 <= effective_size <= unique_count:
+                raise ValueError(
+                    f"Bag {bag.id!r} effective_sample_size must be finite and in [1, {unique_count}]"
+                )
+
+        centered = unique_mapped - unique_mapped.mean(axis=0, keepdims=True)
+        feature_variance = float(np.sum(centered**2) / (unique_count - 1))
+        mean_variance = feature_variance / effective_size
+        mean_norm_squared = float(jnp.sum(empirical**2))
+        if not np.isfinite(mean_variance) or mean_norm_squared <= 0:
+            return 0.0
+        signal_squared = max(mean_norm_squared - mean_variance, 0.0)
+        denominator = signal_squared + mean_variance
+        return float(np.clip(signal_squared / denominator if denominator > 0 else 0.0, 0.0, 1.0))
 
     def _exact_kme_matrix(self, left_bags: List[Bag], right_bags: List[Bag]) -> Float[Array, "n m"]:
         if self.point_sigma_ is None:
@@ -317,6 +489,9 @@ class DistributionClassifier:
         self.training_data_ = None
         self.gram_matrix_ = None
         self.training_embeddings_ = None
+        self.training_shrinkage_factors_ = None
+        self.hybrid_mean_scale_ = None
+        self.hybrid_transport_scale_ = None
         self.point_sigma_ = None
         self.decision_sigma_ = None
         self.feature_names_ = None

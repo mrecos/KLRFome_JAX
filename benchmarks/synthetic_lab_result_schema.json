@@ -10,7 +10,7 @@
     "cases"
   ],
   "properties": {
-    "schema_version": {"const": "1.1"},
+    "schema_version": {"const": "1.2"},
     "configuration": {"type": "object"},
     "configuration_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "environment": {"type": "object"},
@@ -33,7 +33,20 @@
           "scenario": {"type": "object"},
           "dataset_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "fold_plan": {"type": "object"},
-          "fold_results": {"type": "array"},
+          "fold_results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["method", "architecture", "repeat", "fold", "embedding_mse"],
+              "properties": {
+                "method": {"type": "string"},
+                "architecture": {"type": "string"},
+                "repeat": {"type": "integer", "minimum": 1},
+                "fold": {"type": "integer", "minimum": 1},
+                "embedding_mse": {"type": ["number", "null"], "minimum": 0}
+              }
+            }
+          },
           "paired_differences": {"type": "object"},
           "out_of_fold_results": {
             "type": "array",

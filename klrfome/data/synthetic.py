@@ -6,6 +6,7 @@ from typing import List, Literal, Optional
 import jax.numpy as jnp
 import numpy as np
 from numpy.typing import NDArray
+from scipy.special import ndtr
 
 from .formats import Bag, BagDataset
 
@@ -18,6 +19,7 @@ ScenarioKind = Literal[
     "correlation_shift",
     "sparse_signal",
     "nonlinear_mixture",
+    "moment_matched_xor",
 ]
 
 
@@ -27,7 +29,7 @@ class SyntheticScenarioConfig:
 
     ``effect_size`` has a scenario-specific interpretation but always increases
     class separation from zero. Spatial dependence is introduced with a Gaussian
-    copula, preserving each generated feature's empirical marginal distribution.
+    copula based on each generated feature's estimated marginal distribution.
     """
 
     scenario: ScenarioKind
@@ -51,8 +53,8 @@ class SyntheticScenarioConfig:
             raise ValueError("n_features must be positive")
         if not 1 <= self.n_signal_features <= self.n_features:
             raise ValueError("n_signal_features must be between 1 and n_features")
-        if self.scenario == "correlation_shift" and self.n_features < 2:
-            raise ValueError("correlation_shift requires at least two features")
+        if self.scenario in ("correlation_shift", "moment_matched_xor") and self.n_features < 2:
+            raise ValueError(f"{self.scenario} requires at least two features")
         if self.bag_size < 1 or self.min_bag_size < 1 or self.max_bag_size < 1:
             raise ValueError("bag sizes must be positive")
         if self.min_bag_size > self.max_bag_size:
@@ -68,10 +70,12 @@ class SyntheticScenarioConfig:
 def generate_synthetic_bags(config: SyntheticScenarioConfig) -> BagDataset:
     """Generate a canonical, deterministic dataset with known class differences."""
     rng = np.random.default_rng(config.seed)
+    size_rng = np.random.default_rng(np.random.SeedSequence([config.seed, 991]))
+    bag_sizes = [_bag_size(config, size_rng) for _ in range(config.n_bags_per_class)]
     bags: List[Bag] = []
     for label in (0, 1):
         for bag_index in range(config.n_bags_per_class):
-            n_samples = _bag_size(config, rng)
+            n_samples = bag_sizes[bag_index]
             samples = _draw_samples(config, label, bag_index, n_samples, rng)
             coordinates = _grid_coordinates(n_samples, bag_index, label)
             if config.spatial_range > 0:
@@ -205,6 +209,18 @@ def _draw_samples(
             components = rng.choice((-1.0, 1.0), size=n_samples)
             samples[:, 0] = rng.normal(components * separation, within_scale, size=n_samples)
         return samples
+    if config.scenario == "moment_matched_xor":
+        separation = min(effect, 0.95)
+        within_scale = np.sqrt(max(1.0 - separation**2, 0.05))
+        shape_bit = bag_index % 2
+        states = (shape_bit, shape_bit) if label == 0 else (shape_bit, 1 - shape_bit)
+        for feature, is_bimodal in enumerate(states):
+            if is_bimodal:
+                components = rng.choice((-1.0, 1.0), size=n_samples)
+                samples[:, feature] = (
+                    components * separation + rng.normal(size=n_samples) * within_scale
+                )
+        return samples
     raise ValueError(f"Unsupported scenario: {config.scenario}")
 
 
@@ -222,14 +238,26 @@ def _impose_spatial_copula(
     spatial_range: float,
     rng: np.random.Generator,
 ) -> NDArray[np.float64]:
+    """Impose spatial dependence while retaining the estimated marginal law.
+
+    Correlated Gaussian probabilities are mapped through an interpolated
+    empirical quantile function. Unlike rank-reordering a fixed sample, this
+    allows the realized bag mean and distribution to vary with spatial range,
+    which reduces effective information as dependence increases.
+    """
     distances = np.linalg.norm(coordinates[:, None, :] - coordinates[None, :, :], axis=2)
     covariance = np.exp(-distances / spatial_range)
     covariance.flat[:: len(coordinates) + 1] += 1e-6
     output = samples.copy()
+    probabilities = (np.arange(len(samples), dtype=float) + 0.5) / len(samples)
     for feature in range(samples.shape[1]):
         latent = rng.multivariate_normal(np.zeros(len(samples)), covariance)
-        rank_order = np.argsort(latent)
-        output[rank_order, feature] = np.sort(samples[:, feature])
+        uniforms = np.clip(ndtr(latent), probabilities[0], probabilities[-1])
+        output[:, feature] = np.interp(
+            uniforms,
+            probabilities,
+            np.sort(samples[:, feature]),
+        )
     return output
 
 

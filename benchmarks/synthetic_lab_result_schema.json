@@ -10,7 +10,7 @@
     "cases"
   ],
   "properties": {
-    "schema_version": {"const": "1.0"},
+    "schema_version": {"const": "1.1"},
     "configuration": {"type": "object"},
     "configuration_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "environment": {"type": "object"},
@@ -24,7 +24,9 @@
           "dataset_fingerprint",
           "fold_plan",
           "fold_results",
-          "paired_differences"
+          "paired_differences",
+          "out_of_fold_results",
+          "paired_oof_differences"
         ],
         "properties": {
           "case_id": {"type": "string"},
@@ -33,6 +35,43 @@
           "fold_plan": {"type": "object"},
           "fold_results": {"type": "array"},
           "paired_differences": {"type": "object"},
+          "out_of_fold_results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "method",
+                "architecture",
+                "repeat",
+                "n_observations",
+                "top_5_percent_selected",
+                "bag_ids",
+                "labels",
+                "scores",
+                "auc",
+                "pr_auc",
+                "boyce",
+                "top_5_percent_lift",
+                "score_separation"
+              ],
+              "properties": {
+                "method": {"type": "string"},
+                "architecture": {"type": "string"},
+                "repeat": {"type": "integer", "minimum": 1},
+                "n_observations": {"type": "integer", "minimum": 1},
+                "top_5_percent_selected": {"type": "integer", "minimum": 1},
+                "bag_ids": {"type": "array", "items": {"type": "string"}},
+                "labels": {"type": "array", "items": {"type": "integer", "enum": [0, 1]}},
+                "scores": {"type": "array", "items": {"type": "number"}},
+                "auc": {"type": ["number", "null"]},
+                "pr_auc": {"type": ["number", "null"]},
+                "boyce": {"type": ["number", "null"]},
+                "top_5_percent_lift": {"type": ["number", "null"]},
+                "score_separation": {"type": ["number", "null"]}
+              }
+            }
+          },
+          "paired_oof_differences": {"type": "object"},
           "invariance": {"type": ["object", "null"]}
         }
       }

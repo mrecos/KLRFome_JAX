@@ -85,7 +85,56 @@ def test_unequal_bags_respect_limits_and_spatial_coordinates():
     sizes = [bag.n_samples for bag in dataset.collections]
     assert min(sizes) >= 3 and max(sizes) <= 15
     assert len(set(sizes)) > 1
+    assert sizes[:10] == sizes[10:]
     assert all(bag.coordinates is not None for bag in dataset.collections)
+
+
+def test_spatial_dependence_reduces_effective_information():
+    independent = generate_synthetic_bags(
+        SyntheticScenarioConfig(
+            "null",
+            n_bags_per_class=30,
+            n_features=1,
+            bag_size=49,
+            spatial_range=0.0,
+            seed=22,
+        )
+    )
+    dependent = generate_synthetic_bags(
+        SyntheticScenarioConfig(
+            "null",
+            n_bags_per_class=30,
+            n_features=1,
+            bag_size=49,
+            spatial_range=5.0,
+            seed=22,
+        )
+    )
+    independent_means = np.asarray(
+        [np.asarray(bag.samples).mean() for bag in independent.collections]
+    )
+    dependent_means = np.asarray([np.asarray(bag.samples).mean() for bag in dependent.collections])
+    assert dependent_means.var() > independent_means.var() * 5
+
+
+def test_moment_matched_xor_hides_signal_from_mean_and_scale_summaries():
+    dataset = generate_synthetic_bags(
+        SyntheticScenarioConfig(
+            "moment_matched_xor",
+            n_bags_per_class=30,
+            n_features=2,
+            bag_size=300,
+            effect_size=0.9,
+            seed=3,
+        )
+    )
+    summaries = {}
+    for label in (0, 1):
+        bags = [np.asarray(bag.samples) for bag in dataset.collections if bag.label == label]
+        summaries[label] = np.asarray(
+            [np.concatenate([bag.mean(axis=0), bag.std(axis=0)]) for bag in bags]
+        ).mean(axis=0)
+    np.testing.assert_allclose(summaries[0], summaries[1], atol=0.08)
 
 
 def test_transformations_distinguish_invariance_from_reweighting():

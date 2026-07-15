@@ -4,13 +4,16 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 from jsonschema import validate
 
 from benchmarks.run_synthetic_methods_lab import expand_cases, run_lab
 from klrfome.data.synthetic import SyntheticScenarioConfig, generate_synthetic_bags
 from klrfome.utils.evaluation import (
     kernel_approximation_diagnostics,
+    paired_method_differences,
     presence_background_metrics,
+    replicate_summary,
     score_agreement,
 )
 from klrfome.utils.reproducibility import (
@@ -56,6 +59,27 @@ def test_metrics_and_approximation_diagnostics_are_well_defined():
     exact = np.asarray([[1.0, 0.5], [0.5, 1.0]])
     diagnostics = kernel_approximation_diagnostics(exact, exact * 0.99)
     assert diagnostics["relative_frobenius_error"] < 0.02
+    replicate = replicate_summary([0.1, 0.2, 0.3])
+    assert replicate["n"] == 3
+    assert replicate["mean"] == pytest.approx(0.2)
+    assert replicate["confidence_interval"][0] < 0.1
+    assert replicate["confidence_interval"][1] > 0.3
+
+
+def test_pairing_keys_support_pooled_repeat_comparisons():
+    rows = [
+        {"method": "M0", "repeat": 1, "auc": 0.6},
+        {"method": "M1", "repeat": 1, "auc": 0.7},
+        {"method": "M0", "repeat": 2, "auc": 0.5},
+        {"method": "M1", "repeat": 2, "auc": 0.55},
+    ]
+    paired = paired_method_differences(
+        rows,
+        metrics=("auc",),
+        pairing_keys=("repeat",),
+    )
+    assert paired["M1"]["auc"]["n_pairs"] == 2
+    assert paired["M1"]["auc"]["mean_difference"] == pytest.approx(0.075)
 
 
 def test_fingerprints_capture_ordered_scientific_content():
@@ -87,9 +111,26 @@ def test_case_expansion_and_runner_are_deterministic(tmp_path):
     ] == [
         {field: row[field] for field in deterministic_fields} for row in second_case["fold_results"]
     ]
+    assert first_case["out_of_fold_results"] == second_case["out_of_fold_results"]
+    assert first_case["paired_oof_differences"] == second_case["paired_oof_differences"]
+    for row in first_case["out_of_fold_results"]:
+        assert row["n_observations"] == 8
+        assert len(row["bag_ids"]) == len(row["labels"]) == len(row["scores"]) == 8
+        assert row["top_5_percent_selected"] >= 1
     output = tmp_path / "result.json"
     write_strict_json(output, {"finite": 1.0, "undefined": float("nan")})
     assert json.loads(output.read_text()) == {"finite": 1.0, "undefined": None}
+
+
+def test_targeted_v2_configuration_expands_to_documented_cases():
+    configuration_path = (
+        Path(__file__).parents[1] / "benchmarks/synthetic_lab_targeted_v2_config.json"
+    )
+    configuration = json.loads(configuration_path.read_text())
+    cases = expand_cases(configuration)
+    assert len(cases) == 68
+    assert sum(case.scenario == "moment_matched_xor" for case in cases) == 12
+    assert sum(case.unequal_bag_sizes for case in cases) == 5
 
 
 def test_smoke_result_satisfies_tracked_schema(tmp_path):

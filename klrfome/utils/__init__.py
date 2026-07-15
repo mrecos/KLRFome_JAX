@@ -13,6 +13,7 @@ from .evaluation import (
     kernel_approximation_diagnostics,
     paired_method_differences,
     presence_background_metrics,
+    replicate_summary,
     score_agreement,
 )
 from .reproducibility import (
@@ -40,6 +41,7 @@ __all__ = [
     "boyce_index",
     "presence_background_metrics",
     "paired_method_differences",
+    "replicate_summary",
     "score_agreement",
     "kernel_approximation_diagnostics",
     "configuration_fingerprint",

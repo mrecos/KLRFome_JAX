@@ -9,6 +9,11 @@ distribution shifts. Use `synthetic_lab_smoke_config.json` for a fast check and
 `synthetic_lab_config.json` for the research suite. The tracked result contract is
 `synthetic_lab_result_schema.json`; generated output is written under ignored `benchmark_data/`.
 
+`synthetic_lab_targeted_v2_config.json` follows the core run with weaker nuisance signals,
+more independent replicates, corrected spatial dependence, a moment-matched nonlinear XOR
+scenario, and harder sparse-signal cases. Result schema 1.1 pools all held-out predictions within
+each repeat before computing Boyce, lift, AUC, and PR AUC.
+
 See [Synthetic Methods Laboratory](../SYNTHETIC_METHODS_LAB.md) for scenario definitions,
 diagnostics, reproducibility behavior, and interpretation.
 

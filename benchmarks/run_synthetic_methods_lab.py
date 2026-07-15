@@ -7,7 +7,7 @@ import time
 import tracemalloc
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -121,6 +121,10 @@ def run_case(
     )
     specifications = method_specifications(configuration)
     rows: List[Dict[str, Any]] = []
+    oof_scores: Dict[Tuple[str, int], Dict[int, float]] = {}
+    method_architectures = {
+        method_id: specification.method_id for method_id, specification in specifications.items()
+    }
     for assignment in plan.assignments:
         train = dataset.subset(assignment.train_indices)
         test = dataset.subset(assignment.test_indices)
@@ -161,6 +165,13 @@ def run_case(
                 "diagnostics": dict(model.diagnostics_),
             }
             rows.append(row)
+            _record_oof_predictions(
+                oof_scores,
+                method_id,
+                assignment.repeat + 1,
+                assignment.test_indices,
+                scores,
+            )
             fold_models[method_id] = model
             test_scores[method_id] = scores
 
@@ -173,6 +184,7 @@ def run_case(
                 rf_estimators=int(configuration.get("rf_estimators", 200)),
                 include_mean_std=bool(configuration.get("include_mean_std_baseline", True)),
             ).items():
+                method_architectures[method_id] = "bag_summary_baseline"
                 tracemalloc.start()
                 fit_started = time.perf_counter()
                 baseline.fit(train)
@@ -204,8 +216,21 @@ def run_case(
                         "diagnostics": {"summary": baseline.summary},
                     }
                 )
+                _record_oof_predictions(
+                    oof_scores,
+                    method_id,
+                    assignment.repeat + 1,
+                    assignment.test_indices,
+                    scores,
+                )
 
     case_id = f"case-{case_index:04d}-{case.scenario}"
+    out_of_fold_results = _finalize_oof_results(
+        dataset,
+        oof_scores,
+        method_architectures,
+        int(configuration.get("n_repeats", 1)),
+    )
     return {
         "case_id": case_id,
         "scenario": asdict(case),
@@ -213,12 +238,81 @@ def run_case(
         "fold_plan": serialize_fold_plan(plan, dataset, groups),
         "fold_results": rows,
         "paired_differences": paired_method_differences(rows, baseline="M0"),
+        "out_of_fold_results": out_of_fold_results,
+        "paired_oof_differences": paired_method_differences(
+            out_of_fold_results,
+            baseline="M0",
+            pairing_keys=("repeat",),
+        ),
         "invariance": (
             run_invariance_checks(dataset, specifications, configuration, case.seed)
             if bool(configuration.get("run_invariance_checks", False))
             else None
         ),
     }
+
+
+def _record_oof_predictions(
+    storage: Dict[Tuple[str, int], Dict[int, float]],
+    method: str,
+    repeat: int,
+    test_indices: Sequence[int],
+    scores: np.ndarray,
+) -> None:
+    """Record one method's held-out scores and reject fold overlap."""
+    if len(test_indices) != len(scores):
+        raise ValueError("Held-out indices and prediction scores must align")
+    destination = storage.setdefault((method, repeat), {})
+    for index, score in zip(test_indices, scores):
+        position = int(index)
+        if position in destination:
+            raise ValueError(
+                f"Bag index {position} appears more than once for {method} repeat {repeat}"
+            )
+        destination[position] = float(score)
+
+
+def _finalize_oof_results(
+    dataset: Any,
+    storage: Mapping[Tuple[str, int], Mapping[int, float]],
+    architectures: Mapping[str, str],
+    n_repeats: int,
+) -> List[Dict[str, Any]]:
+    """Pool complete held-out predictions before computing ranking metrics."""
+    expected_indices = set(range(dataset.n_locations))
+    expected_keys = {
+        (method, repeat) for method in architectures for repeat in range(1, n_repeats + 1)
+    }
+    if set(storage) != expected_keys:
+        raise ValueError("Out-of-fold prediction coverage differs across methods or repeats")
+    labels = np.asarray(dataset.labels, dtype=int)
+    bag_ids = [bag.id for bag in dataset.collections]
+    output = []
+    for method, repeat in sorted(storage, key=lambda key: (key[1], key[0])):
+        predictions = storage[(method, repeat)]
+        if set(predictions) != expected_indices:
+            raise ValueError(
+                f"Out-of-fold predictions for {method} repeat {repeat} do not cover every bag"
+            )
+        scores = np.asarray(
+            [predictions[index] for index in range(dataset.n_locations)],
+            dtype=float,
+        )
+        threshold = float(np.quantile(scores, 0.95))
+        output.append(
+            {
+                "method": method,
+                "architecture": architectures[method],
+                "repeat": repeat,
+                "n_observations": dataset.n_locations,
+                "top_5_percent_selected": int((scores >= threshold).sum()),
+                "bag_ids": bag_ids,
+                "labels": labels.tolist(),
+                "scores": scores.tolist(),
+                **presence_background_metrics(labels, scores),
+            }
+        )
+    return output
 
 
 def run_invariance_checks(
@@ -272,7 +366,7 @@ def run_lab(
             )
         results.append(run_case(cases[index], configuration, index))
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "configuration": dict(configuration),
         "configuration_sha256": configuration_fingerprint(configuration),
         "interpretation": "synthetic presence-background relative ranking",

@@ -22,7 +22,13 @@ mean shift.
 Cell order is explicitly a nuisance. Uniformly repeating every cell preserves the empirical
 distribution, whereas repeating only selected cells changes probability mass and is therefore an
 intentional distributional change. Spatial dependence is induced with a Gaussian copula that
-preserves generated empirical marginals while changing effective information.
+uses the estimated marginal distribution while allowing realized bag summaries to vary as
+effective information decreases.
+
+The targeted v2 suite adds a moment-matched XOR problem. Every bag has the same population
+feature-wise means and variances, while Gaussian-versus-bimodal shape states form an XOR pattern
+across two features. It is designed to test nonlinear distribution geometry without giving
+mean-plus-standard-deviation logistic regression a direct signal.
 
 ## Running the laboratory
 
@@ -48,6 +54,13 @@ python benchmarks/run_synthetic_methods_lab.py \
   --config benchmarks/synthetic_lab_config.json
 ```
 
+Run the targeted follow-up:
+
+```bash
+python benchmarks/run_synthetic_methods_lab.py \
+  --config benchmarks/synthetic_lab_targeted_v2_config.json
+```
+
 Run one or more zero-based cases reported by `--list-cases`:
 
 ```bash
@@ -58,8 +71,13 @@ python benchmarks/run_synthetic_methods_lab.py \
 
 Raw output is written under ignored `benchmark_data/`. The runner records the configuration hash,
 scientific dataset fingerprint, exact fold assignments, runtime environment, method diagnostics,
-paired differences, and optional invariance checks. Undefined metrics are JSON `null` rather than
-non-standard `NaN`.
+paired differences, pooled out-of-fold predictions, and optional invariance checks. Result schema
+1.1 calculates ranking metrics after pooling every held-out bag within a repeat; fold metrics remain
+available as diagnostics but are not treated as independent scientific replicates. Undefined
+metrics are JSON `null` rather than non-standard `NaN`.
+
+The first complete core-run interpretation is recorded in
+[Synthetic Laboratory Core Results](SYNTHETIC_LAB_RESULTS_2026-07-15.md).
 
 ## Reproducibility and fitted archives
 

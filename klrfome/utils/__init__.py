@@ -8,6 +8,22 @@ from .scaling import (
     get_scaling_from_training_data,
 )
 from .validation import CM_quads, cohens_kappa, metrics, compute_roc_auc, cross_validate
+from .evaluation import (
+    boyce_index,
+    kernel_approximation_diagnostics,
+    paired_method_differences,
+    presence_background_metrics,
+    replicate_summary,
+    score_agreement,
+)
+from .reproducibility import (
+    configuration_fingerprint,
+    dataset_fingerprint,
+    environment_manifest,
+    serialize_fold_plan,
+    write_strict_json,
+)
+from .serialization import load_model, save_model
 
 __all__ = [
     "check_gpu_available",
@@ -22,4 +38,17 @@ __all__ = [
     "metrics",
     "compute_roc_auc",
     "cross_validate",
+    "boyce_index",
+    "presence_background_metrics",
+    "paired_method_differences",
+    "replicate_summary",
+    "score_agreement",
+    "kernel_approximation_diagnostics",
+    "configuration_fingerprint",
+    "dataset_fingerprint",
+    "environment_manifest",
+    "serialize_fold_plan",
+    "write_strict_json",
+    "save_model",
+    "load_model",
 ]

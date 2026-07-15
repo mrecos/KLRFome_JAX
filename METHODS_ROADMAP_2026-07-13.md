@@ -110,7 +110,7 @@ available.
 
 The current negative class is better described as sampled background than as confirmed absence.
 Consequently, model output should currently be interpreted as relative suitability or relative
-intensity, not as calibrated probability of occurrence across Pennsylvania.
+intensity, not as calibrated probability of occurrence across the target domain.
 
 Presence-only measures such as continuous Boyce index, area capture, and lift are useful, but they
 do not cure sampling-domain confounding. High discrimination can arise when presences and background
@@ -153,9 +153,18 @@ More importantly, the current comparison uses a small and compromised evaluation
 - expected future inputs are likely to be aligned rasters and polygon GIS files, not the current
   CSV layout.
 
-The supported conclusion is therefore **no detected improvement under the current data and
-evaluation**, not **evidence that the newer representations are inferior in the intended statewide
-setting**.
+The supported conclusion is therefore **no detected improvement under the current empirical data
+and evaluation**, not **evidence that the newer representations are inferior in the intended
+prediction setting**.
+
+### Evidence update: 2026-07-15 synthetic laboratory
+
+The subsequent 64-case controlled laboratory changed the methods evidence without changing the
+empirical-data caution. M1-128 closely approximated M0, M2 showed coherent gains for nonlinear
+bag-level boundaries, and M3 showed coherent gains for several shape-sensitive signals. Simple
+mean and mean-plus-standard-deviation baselines also solved some cases, demonstrating that the
+newer methods are complementary hypotheses rather than universal replacements. See
+`SYNTHETIC_LAB_RESULTS_2026-07-15.md` for the recorded results and limitations.
 
 ## 3. Current Method Inventory and Status
 
@@ -173,7 +182,8 @@ kernel, logistic-regression, and Wasserstein modules have meaningful unit-test c
 sufficient for controlled experimentation with the methods currently represented.
 
 “Complete” should nevertheless be qualified. The project is not yet complete as a robust,
-production-ready statewide spatial modeling system because several cross-cutting concerns remain:
+production-ready spatial modeling system for its target domain because several cross-cutting
+concerns remain:
 
 - high-level API parity among M0-M3;
 - spatially appropriate and leakage-free model selection;
@@ -291,7 +301,7 @@ suitability unless prevalence or observation-process information supports calibr
    defensible spatial object.
 2. Rebuild GIS ingestion around realistic aligned rasters, polygons, CRS metadata, nodata rules, and
    explicit environmental-variable ordering.
-3. Design statewide background or absence sampling to reflect the target domain and observation
+3. Design background or absence sampling to reflect the target domain and observation
    process.
 4. Resolve pooling across physio-sheds. Many physio-shed × setting strata contain few or no sites,
    so completely separate models may be unidentified or unstable. Compare principled partial
@@ -303,7 +313,7 @@ suitability unless prevalence or observation-process information supports calibr
 6. Conduct definitive spatially blocked or buffered validation.
 7. Tune and rank M0-M3 on realistic data.
 8. Assess calibration only when the sampling design permits a probabilistic interpretation.
-9. Benchmark statewide memory, runtime, tiling, and parallel prediction on representative rasters.
+9. Benchmark domain-scale memory, runtime, tiling, and parallel prediction on representative rasters.
 
 ## 6. New Methods Roadmap
 
@@ -355,7 +365,7 @@ Questions to answer:
 
 ### Stage 3: Establish a fair evaluation protocol
 
-Use repeated, paired, site-level folds. When realistic coordinates and statewide background become
+Use repeated, paired, site-level folds. When realistic coordinates and representative background become
 available, replace or supplement ordinary folds with spatial blocks or buffered leave-location-out
 validation.
 
@@ -458,7 +468,7 @@ for revision than a tie on the current real-data subset.
 Begin definitive comparison only when:
 
 - site geometries and covariate rasters have verified CRS and alignment;
-- the target statewide prediction domain is explicit;
+- the target prediction domain is explicit;
 - background or absence sampling is defensible for that domain;
 - folds reflect spatial dependence and the intended transfer distance; and
 - preprocessing can be reproduced within folds.
@@ -485,7 +495,7 @@ modes.
 4. Build the synthetic distribution-regression test suite.
 5. Implement truly primal RFF logistic fitting and benchmark approximation error against M0.
 6. Complete reproducible serialization and experiment metadata.
-7. Recover or acquire representative statewide rasters, polygons, and sampling information.
+7. Recover or acquire representative rasters, polygons, and sampling information.
 8. Redesign GIS ingestion and site/background construction around those data.
 9. Run paired spatial validation of M0-M3.
 10. Test ARD, grouped kernels, shrinkage embeddings, multi-scale spatial representations, and then

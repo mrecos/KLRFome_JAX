@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "suite": "core",
+  "seed": 42,
+  "n_bags_per_class": 24,
+  "n_features": 4,
+  "bag_size": 30,
+  "replicates": 3,
+  "n_splits": 3,
+  "n_repeats": 1,
+  "lambda_reg": 0.1,
+  "rf_estimators": 300,
+  "include_baselines": true,
+  "include_mean_std_baseline": true,
+  "run_invariance_checks": false,
+  "methods": [
+    {"id": "M0", "method": "M0"},
+    {"id": "M1-rff32", "method": "M1", "rff_features": 32},
+    {"id": "M1", "method": "M1", "rff_features": 128},
+    {"id": "M1-rff512", "method": "M1", "rff_features": 512},
+    {"id": "M2", "method": "M2", "rff_features": 128},
+    {"id": "M3", "method": "M3", "n_projections": 64, "n_quantiles": 64}
+  ],
+  "scenarios": [
+    {"scenario": "null", "effect_sizes": [0.0], "replicates": 5},
+    {"scenario": "mean_shift", "effect_sizes": [0.35, 0.75]},
+    {"scenario": "variance_shift", "effect_sizes": [0.35, 0.75]},
+    {"scenario": "heavy_tail", "effect_sizes": [0.35, 0.8]},
+    {"scenario": "multimodal", "effect_sizes": [0.5, 0.9]},
+    {"scenario": "correlation_shift", "effect_sizes": [0.35, 0.75]},
+    {"scenario": "sparse_signal", "effect_sizes": [0.35, 0.75], "n_features": 10},
+    {"scenario": "nonlinear_mixture", "effect_sizes": [0.75, 1.25]},
+    {
+      "scenario": "mean_shift",
+      "effect_sizes": [0.75],
+      "bag_sizes": [3, 10, 30, 120],
+      "replicates": 2
+    },
+    {
+      "scenario": "mean_shift",
+      "effect_sizes": [0.75],
+      "spatial_ranges": [0.0, 1.5, 5.0],
+      "replicates": 2
+    },
+    {
+      "scenario": "mean_shift",
+      "effect_sizes": [0.75],
+      "unequal_bag_sizes": true,
+      "min_bag_size": 3,
+      "max_bag_size": 120,
+      "replicates": 3
+    }
+  ],
+  "output": "benchmark_data/synthetic_lab_results.json"
+}

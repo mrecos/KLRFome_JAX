@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field, replace
 from functools import partial
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import jax.numpy as jnp
 import numpy as np
@@ -73,6 +73,11 @@ class DistributionClassifier:
     training_embeddings_: Optional[Float[Array, "n d"]] = field(default=None, init=False)
     point_sigma_: Optional[float] = field(default=None, init=False)
     decision_sigma_: Optional[float] = field(default=None, init=False)
+    feature_names_: Optional[Tuple[str, ...]] = field(default=None, init=False)
+    crs_: Optional[str] = field(default=None, init=False)
+    study_design_: Optional[Literal["presence_background", "presence_absence"]] = field(
+        default=None, init=False
+    )
     diagnostics_: Dict[str, object] = field(default_factory=dict, init=False)
     _rff: Optional[RandomFourierFeatures] = field(default=None, init=False, repr=False)
     _mean_kernel: Optional[MeanEmbeddingKernel] = field(default=None, init=False, repr=False)
@@ -84,6 +89,9 @@ class DistributionClassifier:
 
     def fit(self, dataset: BagDataset) -> "DistributionClassifier":
         self._reset_fit_state()
+        self.feature_names_ = tuple(dataset.feature_names)
+        self.crs_ = dataset.crs
+        self.study_design_ = dataset.study_design
         if self.scale_features:
             self.preprocessor_ = BagStandardizer.fit(dataset)
             fitted_data = self.preprocessor_.transform(dataset)
@@ -153,11 +161,17 @@ class DistributionClassifier:
         return self
 
     def predict_bags(self, dataset: BagDataset) -> Float[Array, "n"]:
-        if self.training_data_ is None or self.fit_result_ is None:
+        if self.fit_result_ is None:
             raise RuntimeError("Model must be fit before prediction")
+        if self.feature_names_ is None or tuple(dataset.feature_names) != self.feature_names_:
+            raise ValueError("Prediction feature order differs from the fitted model")
+        if self.crs_ is not None and dataset.crs is not None and str(dataset.crs) != str(self.crs_):
+            raise ValueError("Prediction CRS differs from the fitted model")
         prediction_data = self.preprocessor_.transform(dataset) if self.preprocessor_ else dataset
 
         if self.spec.representation == "exact_kme":
+            if self.training_data_ is None:
+                raise RuntimeError("Exact KME prediction requires reference training bags")
             cross = self._exact_kme_matrix(
                 prediction_data.collections,
                 self.training_data_.collections,
@@ -177,6 +191,8 @@ class DistributionClassifier:
             assert self.training_embeddings_ is not None and self.decision_sigma_ is not None
             cross = self._rbf_matrix(embeddings, self.training_embeddings_, self.decision_sigma_)
         else:
+            if self.training_data_ is None:
+                raise RuntimeError("Sliced-Wasserstein prediction requires reference training bags")
             assert self._sw is not None and self.decision_sigma_ is not None
             distances = self._sw.cross_distances_quantile(
                 prediction_data.collections,
@@ -303,6 +319,9 @@ class DistributionClassifier:
         self.training_embeddings_ = None
         self.point_sigma_ = None
         self.decision_sigma_ = None
+        self.feature_names_ = None
+        self.crs_ = None
+        self.study_design_ = None
         self.diagnostics_ = {}
         self._rff = None
         self._mean_kernel = None

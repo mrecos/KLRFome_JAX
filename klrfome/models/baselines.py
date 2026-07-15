@@ -25,7 +25,7 @@ def bag_summary_matrix(dataset: BagDataset, summary: str = "mean") -> np.ndarray
         )
         return np.column_stack([means, standard_deviations])
     if summary == "geometry":
-        sizes = np.asarray([bag.n_samples for bag in dataset.collections], dtype=float)
+        sizes: np.ndarray = np.asarray([bag.n_samples for bag in dataset.collections], dtype=float)
         diameters = []
         for bag in dataset.collections:
             if bag.coordinates is None:

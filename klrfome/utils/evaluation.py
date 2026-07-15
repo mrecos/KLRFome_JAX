@@ -92,7 +92,7 @@ def paired_method_differences(
                 difference = float(value) - float(baseline_value)
                 if np.isfinite(difference):
                     differences.append(difference)
-            values = np.asarray(differences, dtype=float)
+            values: np.ndarray = np.asarray(differences, dtype=float)
             if len(values) == 0:
                 output[method][metric] = {
                     "n_pairs": 0,
@@ -127,7 +127,7 @@ def replicate_summary(values: Sequence[float], confidence: float = 0.95) -> Dict
     """
     if not 0 < confidence < 1:
         raise ValueError("confidence must be in (0, 1)")
-    array = np.asarray(values, dtype=float)
+    array: np.ndarray = np.asarray(values, dtype=float)
     array = array[np.isfinite(array)]
     if len(array) == 0:
         return {

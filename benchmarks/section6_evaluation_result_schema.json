@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KLRfome Section 6 availability-based evaluation",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "configuration",
+    "configuration_sha256",
+    "mode",
+    "metric_hierarchy",
+    "settings"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "configuration": {"type": "object"},
+    "configuration_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "mode": {"enum": ["prepare", "primary", "full"]},
+    "metric_hierarchy": {"type": "object"},
+    "settings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["data_audit", "designs"],
+        "properties": {
+          "data_audit": {"type": "object"},
+          "designs": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "support_note",
+                "dataset_fingerprint",
+                "availability_fingerprint",
+                "fold_plan",
+                "bag_index"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

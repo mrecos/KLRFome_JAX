@@ -7,6 +7,114 @@ from scipy.stats import spearmanr, t
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 
+def availability_percentile_ranks(
+    target_scores: np.ndarray, availability_scores: np.ndarray
+) -> np.ndarray:
+    """Rank target scores against a fixed sample of mapped availability.
+
+    The returned value is the midpoint empirical rank: the fraction strictly
+    below plus half the fraction tied.  This makes scores from independently
+    fitted cross-validation folds comparable without treating their raw
+    logistic values as calibrated occurrence probabilities.
+    """
+    targets = _validated_finite_vector(target_scores, "target_scores")
+    availability = _validated_finite_vector(availability_scores, "availability_scores")
+    if len(availability) == 0:
+        raise ValueError("availability_scores must be nonempty")
+    ordered = np.sort(availability)
+    lower = np.searchsorted(ordered, targets, side="left")
+    upper = np.searchsorted(ordered, targets, side="right")
+    ranks: np.ndarray = np.asarray((lower + upper) / (2.0 * len(ordered)), dtype=float)
+    return ranks
+
+
+def availability_capture_metrics(
+    site_scores: np.ndarray,
+    availability_scores: np.ndarray,
+    area_fractions: Sequence[float] = (0.05, 0.10, 0.20),
+) -> list[Dict[str, Optional[float]]]:
+    """Report held-out site capture, gain, and lift at mapped-area budgets.
+
+    Thresholds are defined only by the availability distribution.  ``capture``
+    is the fraction of held-out sites above the threshold, ``lift`` is capture
+    divided by mapped area, and ``gain`` is Kvamme's gain ``1-area/capture``.
+    """
+    sites = _validated_finite_vector(site_scores, "site_scores")
+    availability = _validated_finite_vector(availability_scores, "availability_scores")
+    if len(sites) == 0 or len(availability) == 0:
+        raise ValueError("site_scores and availability_scores must be nonempty")
+    rows: list[Dict[str, Optional[float]]] = []
+    for fraction in area_fractions:
+        area = float(fraction)
+        if not 0 < area <= 1:
+            raise ValueError("area_fractions must be in (0, 1]")
+        threshold = float(np.quantile(availability, 1.0 - area, method="lower"))
+        achieved_area = float(np.mean(availability >= threshold))
+        capture = float(np.mean(sites >= threshold))
+        rows.append(
+            {
+                "area_fraction": area,
+                "achieved_area_fraction": achieved_area,
+                "threshold": threshold,
+                "capture": capture,
+                "lift": capture / achieved_area,
+                "gain": 1.0 - achieved_area / capture if capture > 0 else None,
+            }
+        )
+    return rows
+
+
+def continuous_boyce_from_availability(
+    site_scores: np.ndarray,
+    availability_scores: np.ndarray,
+    n_windows: int = 20,
+    window_fraction: float = 0.10,
+) -> Dict[str, Any]:
+    """Compute continuous Boyce diagnostics from sites and mapped availability.
+
+    Scores are first converted to availability percentiles, so pooled
+    out-of-fold predictions from different fitted folds share a common scale.
+    The moving-window predicted-to-expected ratio is then correlated with the
+    window midpoint.  Undefined cases are returned honestly as ``None``.
+    """
+    if n_windows < 3:
+        raise ValueError("n_windows must be at least 3")
+    if not 0 < window_fraction <= 1:
+        raise ValueError("window_fraction must be in (0, 1]")
+    site_percentiles = availability_percentile_ranks(site_scores, availability_scores)
+    availability_percentiles = availability_percentile_ranks(
+        availability_scores, availability_scores
+    )
+    starts = np.linspace(0.0, 1.0 - window_fraction, n_windows)
+    midpoints = []
+    ratios = []
+    for start in starts:
+        end = start + window_fraction
+        include_end = np.isclose(end, 1.0)
+        site_member = (site_percentiles >= start) & (
+            site_percentiles <= end if include_end else site_percentiles < end
+        )
+        available_member = (availability_percentiles >= start) & (
+            availability_percentiles <= end if include_end else availability_percentiles < end
+        )
+        expected = float(np.mean(available_member))
+        if expected <= 0:
+            continue
+        midpoints.append(float((start + end) / 2.0))
+        ratios.append(float(np.mean(site_member) / expected))
+    value: Optional[float] = None
+    if len(ratios) >= 3 and np.unique(ratios).size >= 2:
+        correlation = float(spearmanr(midpoints, ratios).statistic)
+        if np.isfinite(correlation):
+            value = correlation
+    return {
+        "boyce": value,
+        "window_midpoints": midpoints,
+        "predicted_expected_ratios": ratios,
+        "site_percentiles": site_percentiles.tolist(),
+    }
+
+
 def boyce_index(labels: np.ndarray, scores: np.ndarray, n_bins: int = 10) -> Optional[float]:
     """Return a continuous-style Boyce rank index, or ``None`` when undefined."""
     labels, scores = _validated_scores(labels, scores)
@@ -217,6 +325,15 @@ def _validated_scores(labels: np.ndarray, scores: np.ndarray) -> tuple[np.ndarra
     if not np.isfinite(scores).all():
         raise ValueError("scores must be finite")
     return labels, scores
+
+
+def _validated_finite_vector(values: np.ndarray, name: str) -> np.ndarray:
+    array: np.ndarray = np.asarray(values, dtype=float)
+    if array.ndim != 1:
+        raise ValueError(f"{name} must be one-dimensional")
+    if not np.isfinite(array).all():
+        raise ValueError(f"{name} must be finite")
+    return array
 
 
 def _safe_correlation(left: np.ndarray, right: np.ndarray, rank: bool) -> float:

@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import rasterio
 from rasterio.transform import from_origin
+from rasterio.windows import Window
 from shapely.geometry import Point, box
 
 from klrfome.io.raster_source import (
@@ -88,6 +89,17 @@ def test_polygon_and_point_window_are_windowed_and_use_all_band_mask(raster_sour
         raster_source.extract_geometry(Point(2.5, 3.5), "point", 1)
     point_bag = raster_source.extract_geometry(Point(4.5, 1.5), "point", 1, window_size=3)
     assert 1 <= point_bag.n_samples <= 9
+
+
+def test_batched_window_reads_match_individual_reads(raster_source):
+    windows = [Window(0, 0, 3, 3), Window(2, 2, 3, 3)]
+    expected = [raster_source.read_window(window) for window in windows]
+    observed = list(raster_source.read_windows(windows))
+    for (expected_values, expected_valid), (observed_values, observed_valid) in zip(
+        expected, observed
+    ):
+        np.testing.assert_allclose(observed_values, expected_values, equal_nan=True)
+        np.testing.assert_array_equal(observed_valid, expected_valid)
 
 
 def test_background_bags_match_sizes_and_never_overlap_sites(raster_source):

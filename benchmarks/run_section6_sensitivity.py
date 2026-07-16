@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
-from rasterio.transform import xy
+from rasterio.transform import rowcol, xy
 from shapely.geometry import Point
 
 from klrfome.data.formats import Bag, BagDataset
@@ -173,6 +173,63 @@ def _extract_focal_bag(
     return bag
 
 
+def _extract_nested_focal_bags(
+    source: RasterSource,
+    x_coordinate: float,
+    y_coordinate: float,
+    window_sizes: Sequence[int],
+    bag_id: str,
+    label: int,
+    group_id: str,
+    stratum_id: str,
+) -> Dict[int, Bag]:
+    """Read the largest focal window once and derive every nested support."""
+    windows = sorted(set(int(size) for size in window_sizes))
+    largest = _extract_focal_bag(
+        source,
+        x_coordinate,
+        y_coordinate,
+        windows[-1],
+        bag_id,
+        label,
+        group_id,
+        stratum_id,
+    )
+    anchor_row, anchor_col = rowcol(source.transform, x_coordinate, y_coordinate)
+    largest_cells = np.asarray((largest.metadata or {})["cell_indices"], dtype=int)
+    extracted = {}
+    for size in windows:
+        if size == windows[-1]:
+            extracted[size] = largest
+            continue
+        half = size // 2
+        selected = (np.abs(largest_cells[:, 0] - anchor_row) <= half) & (
+            np.abs(largest_cells[:, 1] - anchor_col) <= half
+        )
+        if not selected.any():
+            raise ValueError(f"Focal window for {bag_id!r} contains no valid cells")
+        metadata = dict(largest.metadata or {})
+        metadata.update(
+            {
+                "sensitivity_design": "common_focal_support",
+                "window_size": size,
+                "cell_indices": largest_cells[selected].tolist(),
+            }
+        )
+        extracted[size] = Bag(
+            largest.samples[selected],
+            largest.label,
+            largest.id,
+            metadata=metadata,
+            coordinates=(
+                largest.coordinates[selected] if largest.coordinates is not None else None
+            ),
+            group_id=largest.group_id,
+            stratum_id=largest.stratum_id,
+        )
+    return extracted
+
+
 def build_common_focal_datasets(
     source: RasterSource,
     reference_sites: Sequence[Bag],
@@ -198,19 +255,17 @@ def build_common_focal_datasets(
     excluded_site_ids = []
     for reference in reference_sites:
         center = np.asarray(reference.coordinates, dtype=float).mean(axis=0)
-        extracted = {}
         try:
-            for size in windows:
-                extracted[size] = _extract_focal_bag(
-                    source,
-                    float(center[0]),
-                    float(center[1]),
-                    size,
-                    reference.id,
-                    1,
-                    reference.group_id or reference.id,
-                    stratum_id,
-                )
+            extracted = _extract_nested_focal_bags(
+                source,
+                float(center[0]),
+                float(center[1]),
+                windows,
+                reference.id,
+                1,
+                reference.group_id or reference.id,
+                stratum_id,
+            )
         except ValueError:
             excluded_site_ids.append(reference.id)
             continue
@@ -238,19 +293,17 @@ def build_common_focal_datasets(
         x_coordinate, y_coordinate = xy(source.transform, anchor_row, anchor_col, offset="center")
         index = len(background_bags_by_window[windows[-1]])
         bag_id = f"background-focal-{index:05d}"
-        extracted = {}
         try:
-            for size in windows:
-                extracted[size] = _extract_focal_bag(
-                    source,
-                    float(x_coordinate),
-                    float(y_coordinate),
-                    size,
-                    bag_id,
-                    0,
-                    bag_id,
-                    stratum_id,
-                )
+            extracted = _extract_nested_focal_bags(
+                source,
+                float(x_coordinate),
+                float(y_coordinate),
+                windows,
+                bag_id,
+                0,
+                bag_id,
+                stratum_id,
+            )
         except ValueError:
             continue
         if any(bag.n_samples < min_cells for bag in extracted.values()):

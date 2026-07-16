@@ -1,7 +1,8 @@
 # Synthetic Methods Laboratory
 
-The synthetic laboratory tests when KLRfome's four reference representations differ under known
-bag-level data-generating processes. It is an evaluation and reproducibility layer, not a new model.
+The synthetic laboratory tests when KLRfome's reference representations and experimental
+extensions differ under known bag-level data-generating processes. It is an evaluation and
+reproducibility layer, not a model-ranking contest.
 
 ## Questions
 
@@ -10,6 +11,9 @@ bag-level data-generating processes. It is an evaluation and reproducibility lay
 - Which scale, tail, multimodal, or dependence changes favor M3?
 - How do small, unequal, duplicated, or spatially dependent cell samples affect each method?
 - Do conclusions remain stable across seeds and paired folds?
+- Do orthogonal random features improve M1 fidelity at a fixed feature budget?
+- Does shrinkage reduce finite-bag embedding error when bags are small or spatially dependent?
+- Can a leakage-safe hybrid of mean-embedding and transport kernels adapt to different signals?
 
 ## Scenarios
 
@@ -61,6 +65,23 @@ python benchmarks/run_synthetic_methods_lab.py \
   --config benchmarks/synthetic_lab_targeted_v2_config.json
 ```
 
+Validate the representation extensions before starting their research suite:
+
+```bash
+python benchmarks/run_synthetic_methods_lab.py \
+  --config benchmarks/synthetic_lab_extensions_smoke_config.json
+
+python benchmarks/run_synthetic_methods_lab.py \
+  --config benchmarks/synthetic_lab_extensions_config.json
+```
+
+Run the focused coordinate-shrinkage follow-up:
+
+```bash
+python benchmarks/run_synthetic_methods_lab.py \
+  --config benchmarks/synthetic_lab_spatial_shrinkage_config.json
+```
+
 Run one or more zero-based cases reported by `--list-cases`:
 
 ```bash
@@ -71,13 +92,38 @@ python benchmarks/run_synthetic_methods_lab.py \
 
 Raw output is written under ignored `benchmark_data/`. The runner records the configuration hash,
 scientific dataset fingerprint, exact fold assignments, runtime environment, method diagnostics,
-paired differences, pooled out-of-fold predictions, and optional invariance checks. Result schema
-1.1 calculates ranking metrics after pooling every held-out bag within a repeat; fold metrics remain
-available as diagnostics but are not treated as independent scientific replicates. Undefined
-metrics are JSON `null` rather than non-standard `NaN`.
+paired differences, pooled out-of-fold predictions, optional invariance checks, population-reference
+embedding error, and fitted representation diagnostics. Result schema 1.2 calculates ranking
+metrics after pooling every held-out bag within a repeat; fold metrics remain diagnostics and are
+not independent scientific replicates. Undefined metrics are JSON `null`, not non-standard `NaN`.
+
+For extension runs, the runner creates independent large reference bags from the known synthetic
+distribution. Their fitted-preprocessor, unshrunk RFF means estimate the population target used for
+`embedding_mse`. M4 mixture weights are chosen by grouped inner validation using only the outer
+training fold. The outer test fold therefore remains untouched by weight selection.
+
+The focused spatial-shrinkage suite uses each bag's coordinates and an explicit exponential
+correlation range to compute the independent-cell equivalent of its equally weighted mean:
+
+\[
+n_{eff}=n^2/(\mathbf{1}^{T}R\mathbf{1}), \qquad R_{ij}=\exp(-d_{ij}/\rho).
+\]
+
+Duplicate coordinates are counted once. A zero range returns the unique-cell count. Positive
+ranges reduce effective size as correlation increases. The range can be fixed in `ModelSpec` or
+read from bag metadata; it is not automatically estimated from one bag. This prevents the
+synthetic laboratory from confusing a configured dependence model with a reliable empirical
+range estimator.
+
+ORF initialization caches the bandwidth-free frequency matrix for a seed, input dimension, and
+feature count. The fitted training-fold bandwidth is still applied separately, so caching removes
+repeated QR work without sharing fitted preprocessing or bandwidths across folds. Cache counters
+and initialization timing are recorded in results and model diagnostics.
 
 The first complete core-run interpretation is recorded in
 [Synthetic Laboratory Core Results](SYNTHETIC_LAB_RESULTS_2026-07-15.md).
+The 90-case representation-extension interpretation and focused follow-up rationale are recorded in
+[Synthetic Laboratory Extension Results](SYNTHETIC_LAB_EXTENSION_RESULTS_2026-07-16.md).
 
 ## Reproducibility and fitted archives
 
@@ -87,7 +133,8 @@ Python objects. M0 and M3 retain the reference bag state needed for prediction. 
 preprocessor, random-feature state, and primal coefficients. M2 stores its random-feature state,
 reference bag embeddings, decision bandwidth, and dual coefficients.
 
-Round-trip predictions are tested for M0--M3 and for the public `KLRfome` facade.
+Round-trip predictions are tested for M0--M4 and for the public `KLRfome` facade. M1, M2, and M4
+archives retain the exact IID or orthogonal feature state and any fitted shrinkage factors.
 
 ## Interpretation
 
@@ -96,10 +143,13 @@ it does not establish superiority for archaeological data. Synthetic failure on 
 a representation claims to capture is stronger evidence for revision than a tie on one empirical
 subset. No method is promoted or removed from this laboratory alone.
 
-The next extension is selected conditionally:
+Extension decisions are conditional:
 
-- inadequate M1 fidelity suggests improved random features;
-- small-bag instability suggests shrinkage embeddings;
+- retain orthogonal random features only when they reduce approximation error at the same budget;
+- retain shrinkage only when it reduces small/dependent-bag embedding error without harming larger bags;
 - sparse-signal failure suggests ARD or grouped kernels;
 - reliable nonlinear gains support further M2 work; and
-- shape-sensitive gains support further M3 or hybrid-kernel work.
+- retain M4 only when selected weights and outer-fold gains repeat coherently by scenario.
+
+The implementation and acceptance design are recorded in
+[Representation Extensions Sprint](REPRESENTATION_EXTENSIONS_2026-07-15.md).

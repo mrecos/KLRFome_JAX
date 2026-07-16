@@ -1,6 +1,6 @@
 """Deterministic synthetic bag datasets for distribution-regression experiments."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import List, Literal, Optional
 
 import jax.numpy as jnp
@@ -95,6 +95,7 @@ def generate_synthetic_bags(config: SyntheticScenarioConfig) -> BagDataset:
                         "scenario": config.scenario,
                         "effect_size": config.effect_size,
                         "spatial_range": config.spatial_range,
+                        "spatial_correlation_range": config.spatial_range,
                     },
                 )
             )
@@ -109,6 +110,30 @@ def generate_synthetic_bags(config: SyntheticScenarioConfig) -> BagDataset:
             "configuration": asdict(config),
             "interpretation": "synthetic presence-background relative ranking",
         },
+    )
+
+
+def generate_reference_bags(
+    config: SyntheticScenarioConfig, reference_bag_size: int = 2000
+) -> BagDataset:
+    """Generate independent large bags representing each case's marginal laws.
+
+    Spatial dependence is removed deliberately: the reference estimates the
+    population marginal embedding that a finite, potentially correlated bag is
+    attempting to represent. Bag ordering and distribution states match the
+    original configuration.
+    """
+    if reference_bag_size < 2:
+        raise ValueError("reference_bag_size must be at least 2")
+    reference_seed = int(np.random.SeedSequence([config.seed, 1701]).generate_state(1)[0])
+    return generate_synthetic_bags(
+        replace(
+            config,
+            bag_size=reference_bag_size,
+            unequal_bag_sizes=False,
+            spatial_range=0.0,
+            seed=reference_seed,
+        )
     )
 
 

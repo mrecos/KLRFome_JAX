@@ -2,9 +2,15 @@
 
 import jax.numpy as jnp
 import jax.random as random
+import numpy as np
+import pytest
 
 from klrfome.kernels.rbf import RBFKernel
-from klrfome.kernels.rff import RandomFourierFeatures
+from klrfome.kernels.rff import (
+    RandomFourierFeatures,
+    clear_rff_frequency_cache,
+    rff_frequency_cache_info,
+)
 from klrfome.kernels.distribution import MeanEmbeddingKernel
 
 
@@ -144,3 +150,43 @@ def test_rff_sincos_estimator():
     rff2 = RandomFourierFeatures(sigma=1.0, n_features=31, seed=1)
     rff2._initialize_weights(4)
     assert rff2.feature_map(X).shape == (8, 62)
+
+
+def test_orthogonal_rff_is_deterministic_and_block_orthogonal():
+    first = RandomFourierFeatures(sigma=1.3, n_features=10, seed=17, scheme="orthogonal")
+    second = RandomFourierFeatures(sigma=1.3, n_features=10, seed=17, scheme="orthogonal")
+    first._initialize_weights(4)
+    second._initialize_weights(4)
+    assert jnp.array_equal(first._W, second._W)
+    assert first._W.shape == (4, 10)
+
+    directions = first._W[:, :4] / jnp.linalg.norm(first._W[:, :4], axis=0)
+    assert jnp.allclose(directions.T @ directions, jnp.eye(4), atol=1e-5)
+
+    X = random.normal(random.PRNGKey(3), (9, 4))
+    gram = first(X, X)
+    assert jnp.allclose(gram, gram.T, atol=1e-6)
+    assert jnp.linalg.eigvalsh(gram).min() >= -1e-5
+
+
+def test_rff_rejects_unknown_frequency_scheme():
+    with pytest.raises(ValueError, match="scheme"):
+        RandomFourierFeatures(scheme="unsupported")
+
+
+def test_orthogonal_frequency_cache_reuses_bandwidth_free_draws():
+    clear_rff_frequency_cache()
+    first = RandomFourierFeatures(sigma=1.5, n_features=17, seed=29, scheme="orthogonal")
+    first._initialize_weights(4)
+    assert first.frequency_cache_hit is False
+    assert rff_frequency_cache_info()["misses"] == 1
+
+    second = RandomFourierFeatures(sigma=0.75, n_features=17, seed=29, scheme="orthogonal")
+    second._initialize_weights(4)
+    assert second.frequency_cache_hit is True
+    assert rff_frequency_cache_info()["hits"] == 1
+    np.testing.assert_allclose(
+        np.asarray(first._W) * first.sigma,
+        np.asarray(second._W) * second.sigma,
+        atol=0,
+    )

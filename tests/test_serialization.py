@@ -18,7 +18,34 @@ from klrfome.utils.serialization import load_model, save_model
 
 @pytest.mark.parametrize(
     "spec",
-    [ModelSpec.m0(), ModelSpec.m1(12), ModelSpec.m2(12), ModelSpec.m3(8, 8)],
+    [
+        ModelSpec.m0(),
+        ModelSpec.m1(12),
+        ModelSpec.m1(12, rff_scheme="orthogonal", embedding_estimator="shrinkage"),
+        ModelSpec.m1(
+            12,
+            rff_scheme="orthogonal",
+            embedding_estimator="shrinkage",
+            shrinkage_effective_size="spatial",
+            shrinkage_spatial_range=2.0,
+        ),
+        ModelSpec.m2(12),
+        ModelSpec.m3(8, 8),
+        ModelSpec.m4(
+            0.4,
+            rff_features=12,
+            rff_scheme="orthogonal",
+            embedding_estimator="shrinkage",
+            n_projections=8,
+            n_quantiles=8,
+        ),
+        ModelSpec.m4(
+            0.6,
+            hybrid_mean_representation="exact_kme",
+            n_projections=8,
+            n_quantiles=8,
+        ),
+    ],
 )
 def test_distribution_classifier_round_trip_predictions(spec, tmp_path):
     dataset = generate_synthetic_bags(

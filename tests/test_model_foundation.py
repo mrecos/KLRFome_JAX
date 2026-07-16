@@ -1,10 +1,11 @@
-"""Correctness tests for the M0--M3 model foundation."""
+"""Correctness tests for the M0--M4 model foundation."""
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from klrfome.data.formats import Bag, BagDataset, SampleCollection, TrainingData
+from klrfome.data.synthetic import duplicate_all_cells
 from klrfome.models.distribution import DistributionClassifier
 from klrfome.models.klr import KernelLogisticRegression
 from klrfome.models.primal import PrimalLogisticRegression
@@ -88,7 +89,13 @@ def test_high_level_spec_rejects_wasserstein_one():
 
 @pytest.mark.parametrize(
     "spec",
-    [ModelSpec.m0(), ModelSpec.m1(32), ModelSpec.m2(32), ModelSpec.m3(12, 16)],
+    [
+        ModelSpec.m0(),
+        ModelSpec.m1(32),
+        ModelSpec.m2(32),
+        ModelSpec.m3(12, 16),
+        ModelSpec.m4(0.5, rff_features=32, n_projections=12, n_quantiles=16),
+    ],
 )
 def test_all_supported_methods_fit_and_predict_finitely(spec):
     dataset = _dataset()
@@ -167,3 +174,127 @@ def test_legacy_api_maps_to_m1_and_serializes_primal_coefficients(tmp_path):
     assert restored._core_model is not None
     assert restored._core_model.spec.method_id == "M1"
     assert np.isfinite(np.asarray(restored._core_model.fit_result_.coefficients)).all()
+
+
+def test_rff_shrinkage_is_finite_bounded_and_duplicate_invariant():
+    dataset = _dataset()
+    model = DistributionClassifier(
+        ModelSpec.m1(32, rff_scheme="orthogonal", embedding_estimator="shrinkage"),
+        seed=12,
+    ).fit(dataset)
+    factors = np.asarray(model.training_shrinkage_factors_)
+    assert factors.shape == (dataset.n_locations,)
+    assert np.isfinite(factors).all()
+    assert np.all((factors >= 0) & (factors <= 1))
+
+    original = np.asarray(model.predict_bags(dataset))
+    duplicated = np.asarray(model.predict_bags(duplicate_all_cells(dataset, repeats=3)))
+    np.testing.assert_allclose(duplicated, original, atol=2e-6)
+
+    without_coordinates = _dataset()
+    for bag in without_coordinates.collections:
+        bag.coordinates = None
+    coordinate_free_model = DistributionClassifier(
+        ModelSpec.m1(32, rff_scheme="orthogonal", embedding_estimator="shrinkage"),
+        seed=12,
+    ).fit(without_coordinates)
+    original = np.asarray(coordinate_free_model.predict_bags(without_coordinates))
+    duplicated = np.asarray(
+        coordinate_free_model.predict_bags(duplicate_all_cells(without_coordinates, repeats=3))
+    )
+    np.testing.assert_allclose(duplicated, original, atol=2e-6)
+
+
+def test_metadata_effective_size_is_explicit_and_validated():
+    dataset = _dataset()
+    spec = ModelSpec.m1(
+        24,
+        embedding_estimator="shrinkage",
+        shrinkage_effective_size="metadata",
+    )
+    with pytest.raises(ValueError, match="effective_sample_size"):
+        DistributionClassifier(spec).fit(dataset)
+
+    for bag in dataset.collections:
+        bag.metadata = {**(bag.metadata or {}), "effective_sample_size": 2.0}
+    fitted = DistributionClassifier(spec).fit(dataset)
+    assert np.isfinite(np.asarray(fitted.training_shrinkage_factors_)).all()
+
+
+def test_spatial_effective_size_uses_coordinates_and_explicit_range():
+    dataset = _dataset()
+    missing_range = ModelSpec.m1(
+        24,
+        embedding_estimator="shrinkage",
+        shrinkage_effective_size="spatial",
+    )
+    with pytest.raises(ValueError, match="spatial correlation range"):
+        DistributionClassifier(missing_range).fit(dataset)
+
+    short_range = DistributionClassifier(
+        ModelSpec.m1(
+            24,
+            embedding_estimator="shrinkage",
+            shrinkage_effective_size="spatial",
+            shrinkage_spatial_range=0.5,
+        )
+    ).fit(dataset)
+    long_range = DistributionClassifier(
+        ModelSpec.m1(
+            24,
+            embedding_estimator="shrinkage",
+            shrinkage_effective_size="spatial",
+            shrinkage_spatial_range=5.0,
+        )
+    ).fit(dataset)
+    assert np.mean(long_range.training_effective_sizes_) < np.mean(
+        short_range.training_effective_sizes_
+    )
+    assert np.mean(long_range.training_shrinkage_factors_) < np.mean(
+        short_range.training_shrinkage_factors_
+    )
+
+    duplicated = duplicate_all_cells(dataset, repeats=3)
+    np.testing.assert_allclose(
+        long_range.predict_bags(duplicated),
+        long_range.predict_bags(dataset),
+        atol=2e-6,
+    )
+
+
+def test_hybrid_raw_endpoints_reproduce_component_gram_matrices():
+    dataset = _dataset()
+    common = {"seed": 15, "round_exact_kernel": False}
+
+    m0 = DistributionClassifier(ModelSpec.m0(), **common).fit(dataset)
+    mean_endpoint = DistributionClassifier(
+        ModelSpec.m4(
+            1.0,
+            hybrid_mean_representation="exact_kme",
+            n_projections=10,
+            n_quantiles=12,
+            hybrid_normalize=False,
+        ),
+        **common,
+    ).fit(dataset)
+    np.testing.assert_allclose(mean_endpoint.gram_matrix_, m0.gram_matrix_, atol=2e-6)
+    np.testing.assert_allclose(
+        mean_endpoint.predict_bags(dataset), m0.predict_bags(dataset), atol=2e-5
+    )
+
+    m3 = DistributionClassifier(ModelSpec.m3(10, 12), **common).fit(dataset)
+    transport_endpoint = DistributionClassifier(
+        ModelSpec.m4(
+            0.0,
+            hybrid_mean_representation="rff_kme",
+            rff_features=16,
+            n_projections=10,
+            n_quantiles=12,
+            hybrid_normalize=False,
+        ),
+        **common,
+    ).fit(dataset)
+    np.testing.assert_allclose(transport_endpoint.gram_matrix_, m3.gram_matrix_, atol=2e-6)
+    np.testing.assert_allclose(
+        transport_endpoint.predict_bags(dataset), m3.predict_bags(dataset), atol=2e-5
+    )

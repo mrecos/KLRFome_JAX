@@ -6,6 +6,7 @@ from .synthetic import (
     SyntheticScenarioConfig,
     duplicate_all_cells,
     duplicate_selected_cells,
+    generate_reference_bags,
     generate_synthetic_bags,
     permute_bag_cells,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "BagStandardizer",
     "SyntheticScenarioConfig",
     "generate_synthetic_bags",
+    "generate_reference_bags",
     "permute_bag_cells",
     "duplicate_all_cells",
     "duplicate_selected_cells",

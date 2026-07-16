@@ -166,6 +166,15 @@ mean and mean-plus-standard-deviation baselines also solved some cases, demonstr
 newer methods are complementary hypotheses rather than universal replacements. See
 `SYNTHETIC_LAB_RESULTS_2026-07-15.md` for the recorded results and limitations.
 
+### Phase 6: representation efficiency and bag uncertainty
+
+The next sprint implemented equal-budget IID versus orthogonal random features, optional
+finite-bag shrinkage for RFF embeddings, and an experimental M4 hybrid of mean-embedding and
+sliced-Wasserstein kernels. The synthetic runner now measures embedding error against independent
+large reference bags and selects M4 weights inside each outer training fold. These extensions are
+candidate improvements, not new defaults; their replicated research run and mapped empirical
+validation remain advancement gates. See `REPRESENTATION_EXTENSIONS_2026-07-15.md`.
+
 ## 3. Current Method Inventory and Status
 
 | ID | Representation and decision kernel | Scientific role | Current status |
@@ -174,6 +183,7 @@ newer methods are complementary hypotheses rather than universal replacements. S
 | M1 | RFF mean embedding + linear bag kernel | Scalable approximation to M0 | Implemented; retain and validate approximation error |
 | M2 | RFF mean embedding + RBF bag kernel | Added nonlinear capacity among distributions | Implemented in lower-level/tabular workflow; needs a clean public comparison interface |
 | M3 | Fixed-quantile sliced-Wasserstein-2 distance + RBF kernel + KLR | Alternative transport-based distribution geometry | Implemented; retain as experimental |
+| M4 | Mean-embedding kernel + sliced-Wasserstein-2 kernel | Experimental hybrid geometry with leakage-safe weight selection | Implemented; evaluate before promotion |
 
 ### What appears complete for the current methods
 

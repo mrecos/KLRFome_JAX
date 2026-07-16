@@ -51,11 +51,14 @@ The current API separates the bag representation, bag-level decision rule, and s
 | **M1** | Random Fourier feature mean embedding | Linear | Primal regularized logistic regression |
 | **M2** | Random Fourier feature mean embedding | RBF | Dual KLR |
 | **M3** | Fixed-quantile sliced Wasserstein-2 | RBF | Dual KLR |
+| **M4** | Mean embedding + sliced Wasserstein-2 | Weighted hybrid | Dual KLR |
 
 M0 preserves the original distribution-regression lineage. M1 offers a scalable explicit
 mean-embedding approximation, M2 adds a nonlinear decision kernel over that embedding, and M3
-compares projected distributional shape. No method is treated as universally preferred; method
-comparisons must use the same bags and spatial validation folds.
+compares projected distributional shape. M1 and M2 optionally support orthogonal random features
+and shrinkage embeddings for finite-bag uncertainty. M4 is an experimental hybrid of mean-embedding
+and transport kernels. No method is treated as universally preferred; comparisons must use the
+same bags and spatial validation folds.
 
 ## Installation
 
@@ -122,7 +125,8 @@ print(float(np.nanmin(suitability)), float(np.nanmax(suitability)))
 ```
 
 This example uses M1 for an efficient mean-embedding workflow. Replace the specification with
-`ModelSpec.m0()`, `ModelSpec.m2()`, or `ModelSpec.m3()` to use another supported architecture.
+`ModelSpec.m0()`, `ModelSpec.m2()`, `ModelSpec.m3()`, or an explicit experimental
+`ModelSpec.m4()` to use another architecture.
 Run the complete example with:
 
 ```bash
@@ -185,7 +189,8 @@ be difficult to identify from aggregate metrics alone.
 
 ## Project status
 
-The Python/JAX model and data foundation, M0–M3 reference methods, tabular/raster ingestion,
+The Python/JAX model and data foundation, M0–M3 reference methods, experimental M4 hybrid,
+tabular/raster ingestion,
 spatial validation, and focal prediction workflow are implemented and tested. The current real-data
 comparison covers one physio-shed and should not be used for final method ranking.
 
@@ -204,6 +209,8 @@ Open methodological decisions include:
 - [Section 6 validation notebook](notebooks/05_section6_model_validation.ipynb)
 - [Synthetic methods laboratory](SYNTHETIC_METHODS_LAB.md)
 - [Synthetic laboratory core results (2026-07-15)](SYNTHETIC_LAB_RESULTS_2026-07-15.md)
+- [Representation extensions sprint (2026-07-15)](REPRESENTATION_EXTENSIONS_2026-07-15.md)
+- [Synthetic laboratory extension results (2026-07-16)](SYNTHETIC_LAB_EXTENSION_RESULTS_2026-07-16.md)
 - [Synthetic methods notebook](notebooks/06_synthetic_methods_lab.ipynb)
 - [R-to-Python/JAX methodological comparison](COMPARISON_R_vs_JAX.md)
 - [Synthetic example data](example_data/README.md)

@@ -13,6 +13,8 @@ import numpy as np
 from ..api import KLRfome
 from ..data.formats import Bag, BagDataset
 from ..data.preprocessing import BagStandardizer
+from ..kernels.distribution import MeanEmbeddingKernel
+from ..kernels.rbf import RBFKernel
 from ..kernels.rff import RandomFourierFeatures
 from ..kernels.wasserstein import SlicedWassersteinDistance
 from ..models.distribution import DistributionClassifier
@@ -98,9 +100,17 @@ def _encode_core(core: DistributionClassifier) -> tuple[Dict[str, Any], Dict[str
         arrays["rff_weights"] = _finite_array(core._rff._W)
     if core.training_embeddings_ is not None:
         arrays["training_embeddings"] = _finite_array(core.training_embeddings_)
+    if core.training_shrinkage_factors_ is not None:
+        arrays["training_shrinkage_factors"] = _finite_array(core.training_shrinkage_factors_)
+    if core.training_effective_sizes_ is not None:
+        arrays["training_effective_sizes"] = _finite_array(core.training_effective_sizes_)
     if core._sw is not None and core._sw._projections is not None:
         arrays["wasserstein_projections"] = _finite_array(core._sw._projections)
-    needs_reference_bags = core.spec.representation in ("exact_kme", "sliced_wasserstein")
+    needs_reference_bags = core.spec.representation in (
+        "exact_kme",
+        "sliced_wasserstein",
+        "hybrid",
+    )
     if needs_reference_bags:
         if core.training_data_ is None:
             raise RuntimeError("This model architecture requires reference training bags")
@@ -130,6 +140,8 @@ def _encode_core(core: DistributionClassifier) -> tuple[Dict[str, Any], Dict[str
             "study_design": core.study_design_,
             "point_sigma": core.point_sigma_,
             "decision_sigma": core.decision_sigma_,
+            "hybrid_mean_scale": core.hybrid_mean_scale_,
+            "hybrid_transport_scale": core.hybrid_transport_scale_,
             "coefficient_kind": coefficient_kind,
             "converged": fit.converged,
             "n_iterations": fit.n_iterations,
@@ -165,6 +177,8 @@ def _decode_core(
     core.study_design_ = fitted.get("study_design")
     core.point_sigma_ = fitted.get("point_sigma")
     core.decision_sigma_ = fitted.get("decision_sigma")
+    core.hybrid_mean_scale_ = fitted.get("hybrid_mean_scale")
+    core.hybrid_transport_scale_ = fitted.get("hybrid_transport_scale")
     core.diagnostics_ = dict(fitted.get("diagnostics") or {})
     preprocessor = manifest.get("preprocessor")
     if preprocessor is not None:
@@ -193,13 +207,54 @@ def _decode_core(
         if weights.ndim != 2 or weights.shape[1] != spec.rff_features:
             raise ValueError("Archived RFF weights have incompatible shape")
         core._rff = RandomFourierFeatures(
-            sigma=float(core.point_sigma_), n_features=spec.rff_features, seed=core.seed
+            sigma=float(core.point_sigma_),
+            n_features=spec.rff_features,
+            seed=core.seed,
+            scheme=spec.rff_scheme,
         )
         core._rff._W = jnp.asarray(weights)
         core._rff._input_dim = weights.shape[0]
         core._rff._b = None
+        if "training_shrinkage_factors" in arrays:
+            core.training_shrinkage_factors_ = jnp.asarray(
+                _required_array(arrays, "training_shrinkage_factors")
+            )
+        if "training_effective_sizes" in arrays:
+            core.training_effective_sizes_ = jnp.asarray(
+                _required_array(arrays, "training_effective_sizes")
+            )
         if spec.solver == "dual_klr":
             core.training_embeddings_ = jnp.asarray(_required_array(arrays, "training_embeddings"))
+    elif spec.representation == "hybrid":
+        core.training_data_ = _decode_training_bags(arrays, fitted)
+        projections = _required_array(arrays, "wasserstein_projections")
+        core._sw = SlicedWassersteinDistance(spec.n_projections, 2, core.seed)
+        core._sw._projections = jnp.asarray(projections)
+        core._sw._dimension = projections.shape[1]
+        if spec.hybrid_mean_representation == "rff_kme":
+            weights = _required_array(arrays, "rff_weights")
+            if weights.ndim != 2 or weights.shape[1] != spec.rff_features:
+                raise ValueError("Archived RFF weights have incompatible shape")
+            core._rff = RandomFourierFeatures(
+                sigma=float(core.point_sigma_),
+                n_features=spec.rff_features,
+                seed=core.seed,
+                scheme=spec.rff_scheme,
+            )
+            core._rff._W = jnp.asarray(weights)
+            core._rff._input_dim = weights.shape[0]
+            core._rff._b = None
+            core.training_embeddings_ = jnp.asarray(_required_array(arrays, "training_embeddings"))
+            if "training_shrinkage_factors" in arrays:
+                core.training_shrinkage_factors_ = jnp.asarray(
+                    _required_array(arrays, "training_shrinkage_factors")
+                )
+            if "training_effective_sizes" in arrays:
+                core.training_effective_sizes_ = jnp.asarray(
+                    _required_array(arrays, "training_effective_sizes")
+                )
+        else:
+            core._mean_kernel = MeanEmbeddingKernel(RBFKernel(float(core.point_sigma_)))
     elif spec.representation == "sliced_wasserstein":
         projections = _required_array(arrays, "wasserstein_projections")
         core._sw = SlicedWassersteinDistance(spec.n_projections, 2, core.seed)

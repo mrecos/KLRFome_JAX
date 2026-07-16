@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Run deterministic synthetic M0--M3 distribution-regression experiments."""
+"""Run deterministic synthetic M0--M4 distribution-regression experiments."""
 
 import argparse
 import json
 import time
 import tracemalloc
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -15,9 +15,11 @@ from klrfome.data.synthetic import (
     SyntheticScenarioConfig,
     duplicate_all_cells,
     duplicate_selected_cells,
+    generate_reference_bags,
     generate_synthetic_bags,
     permute_bag_cells,
 )
+from klrfome.kernels.rff import clear_rff_frequency_cache, rff_frequency_cache_info
 from klrfome.models.baselines import baseline_models
 from klrfome.models.distribution import DistributionClassifier
 from klrfome.models.spec import ModelSpec
@@ -89,15 +91,50 @@ def method_specifications(configuration: Mapping[str, Any]) -> Dict[str, ModelSp
         identifier = str(item.get("id", method))
         if identifier in output:
             raise ValueError(f"Duplicate method id: {identifier}")
+        rff_features = int(item.get("rff_features", 128))
+        rff_scheme = str(item.get("rff_scheme", "iid"))
+        embedding_estimator = str(item.get("embedding_estimator", "empirical"))
+        shrinkage_effective_size = str(item.get("shrinkage_effective_size", "nominal"))
+        configured_spatial_range = item.get("shrinkage_spatial_range")
+        shrinkage_spatial_range = (
+            float(configured_spatial_range) if configured_spatial_range is not None else None
+        )
         if method == "M0":
             spec = ModelSpec.m0()
         elif method == "M1":
-            spec = ModelSpec.m1(int(item.get("rff_features", 128)))
+            spec = ModelSpec.m1(
+                rff_features,
+                rff_scheme=rff_scheme,
+                embedding_estimator=embedding_estimator,
+                shrinkage_effective_size=shrinkage_effective_size,
+                shrinkage_spatial_range=shrinkage_spatial_range,
+            )
         elif method == "M2":
-            spec = ModelSpec.m2(int(item.get("rff_features", 128)))
+            spec = ModelSpec.m2(
+                rff_features,
+                rff_scheme=rff_scheme,
+                embedding_estimator=embedding_estimator,
+                shrinkage_effective_size=shrinkage_effective_size,
+                shrinkage_spatial_range=shrinkage_spatial_range,
+            )
         elif method == "M3":
             spec = ModelSpec.m3(
                 int(item.get("n_projections", 64)), int(item.get("n_quantiles", 64))
+            )
+        elif method == "M4":
+            weights = item.get("hybrid_weights")
+            initial_weight = float(weights[0]) if weights else float(item.get("hybrid_weight", 0.5))
+            spec = ModelSpec.m4(
+                hybrid_weight=initial_weight,
+                hybrid_mean_representation=str(item.get("hybrid_mean_representation", "rff_kme")),
+                rff_features=rff_features,
+                rff_scheme=rff_scheme,
+                embedding_estimator=embedding_estimator,
+                shrinkage_effective_size=shrinkage_effective_size,
+                shrinkage_spatial_range=shrinkage_spatial_range,
+                n_projections=int(item.get("n_projections", 64)),
+                n_quantiles=int(item.get("n_quantiles", 64)),
+                hybrid_normalize=bool(item.get("hybrid_normalize", True)),
             )
         else:
             raise ValueError(f"Unsupported method: {method}")
@@ -110,6 +147,10 @@ def run_case(
 ) -> Dict[str, Any]:
     """Run all configured methods on one generated dataset and shared folds."""
     dataset = generate_synthetic_bags(case)
+    reference_bag_size = int(configuration.get("reference_bag_size", 0))
+    reference_dataset = (
+        generate_reference_bags(case, reference_bag_size) if reference_bag_size > 0 else None
+    )
     groups = [bag.group_id or bag.id for bag in dataset.collections]
     plan = make_fold_plan(
         dataset,
@@ -120,6 +161,8 @@ def run_case(
         group_ids=groups,
     )
     specifications = method_specifications(configuration)
+    model_seed = int(configuration.get("model_seed", case.seed))
+    method_items = {str(item.get("id", item["method"])): item for item in configuration["methods"]}
     rows: List[Dict[str, Any]] = []
     oof_scores: Dict[Tuple[str, int], Dict[int, float]] = {}
     method_architectures = {
@@ -128,13 +171,26 @@ def run_case(
     for assignment in plan.assignments:
         train = dataset.subset(assignment.train_indices)
         test = dataset.subset(assignment.test_indices)
+        reference_test = (
+            reference_dataset.subset(assignment.test_indices)
+            if reference_dataset is not None
+            else None
+        )
         fold_models: Dict[str, DistributionClassifier] = {}
         test_scores: Dict[str, np.ndarray] = {}
         for method_id, spec in specifications.items():
-            model = DistributionClassifier(
+            fitted_spec = _resolve_fold_specification(
                 spec,
+                method_items[method_id],
+                train,
+                configuration,
+                case.seed + assignment.repeat * 1009 + assignment.fold,
+                model_seed,
+            )
+            model = DistributionClassifier(
+                fitted_spec,
                 lambda_reg=float(configuration.get("lambda_reg", 0.1)),
-                seed=case.seed,
+                seed=model_seed,
                 round_exact_kernel=False,
             )
             tracemalloc.start()
@@ -145,6 +201,11 @@ def run_case(
             scores = np.asarray(model.predict_bags(test), dtype=float)
             predict_seconds = time.perf_counter() - predict_started
             train_scores = np.asarray(model.predict_bags(train), dtype=float)
+            embedding_mse = (
+                _reference_embedding_mse(model, test, reference_test)
+                if reference_test is not None and model._rff is not None
+                else None
+            )
             _, peak_bytes = tracemalloc.get_traced_memory()
             tracemalloc.stop()
             test_metrics = presence_background_metrics(np.asarray(test.labels), scores)
@@ -162,6 +223,7 @@ def run_case(
                 "fit_seconds": fit_seconds,
                 "predict_seconds": predict_seconds,
                 "peak_python_memory_mb": peak_bytes / (1024**2),
+                "embedding_mse": embedding_mse,
                 "diagnostics": dict(model.diagnostics_),
             }
             rows.append(row)
@@ -180,7 +242,7 @@ def run_case(
         )
         if bool(configuration.get("include_baselines", True)):
             for method_id, baseline in baseline_models(
-                seed=case.seed,
+                seed=model_seed,
                 rf_estimators=int(configuration.get("rf_estimators", 200)),
                 include_mean_std=bool(configuration.get("include_mean_std_baseline", True)),
             ).items():
@@ -213,6 +275,7 @@ def run_case(
                         "fit_seconds": fit_seconds,
                         "predict_seconds": predict_seconds,
                         "peak_python_memory_mb": peak_bytes / (1024**2),
+                        "embedding_mse": None,
                         "diagnostics": {"summary": baseline.summary},
                     }
                 )
@@ -245,11 +308,78 @@ def run_case(
             pairing_keys=("repeat",),
         ),
         "invariance": (
-            run_invariance_checks(dataset, specifications, configuration, case.seed)
+            run_invariance_checks(dataset, specifications, configuration, model_seed)
             if bool(configuration.get("run_invariance_checks", False))
             else None
         ),
     }
+
+
+def _resolve_fold_specification(
+    specification: ModelSpec,
+    method_item: Mapping[str, Any],
+    training_data: Any,
+    configuration: Mapping[str, Any],
+    selection_seed: int,
+    model_seed: int,
+) -> ModelSpec:
+    """Select an M4 mixture weight using only the current outer training fold."""
+    weights = method_item.get("hybrid_weights")
+    if specification.method_id != "M4" or not weights:
+        return specification
+    candidates = sorted({float(value) for value in weights})
+    if not candidates:
+        raise ValueError("hybrid_weights must contain at least one value")
+    groups = [bag.group_id or bag.id for bag in training_data.collections]
+    inner_splits = min(int(configuration.get("inner_splits", 3)), len(set(groups)))
+    if inner_splits < 2:
+        raise ValueError("M4 weight selection requires at least two inner groups")
+    plan = make_fold_plan(
+        training_data,
+        n_splits=inner_splits,
+        n_repeats=1,
+        seed=selection_seed,
+        stratified=True,
+        group_ids=groups,
+    )
+    evaluations = []
+    for weight in candidates:
+        candidate = replace(specification, hybrid_weight=weight)
+        oof_scores = np.full(training_data.n_locations, np.nan, dtype=float)
+        for assignment in plan.assignments:
+            inner_train = training_data.subset(assignment.train_indices)
+            inner_test = training_data.subset(assignment.test_indices)
+            model = DistributionClassifier(
+                candidate,
+                lambda_reg=float(configuration.get("lambda_reg", 0.1)),
+                seed=model_seed,
+                round_exact_kernel=False,
+            ).fit(inner_train)
+            oof_scores[np.asarray(assignment.test_indices, dtype=int)] = np.asarray(
+                model.predict_bags(inner_test), dtype=float
+            )
+        if not np.isfinite(oof_scores).all():
+            raise ValueError("Inner M4 selection did not predict every training bag")
+        auc = presence_background_metrics(np.asarray(training_data.labels), oof_scores)["auc"]
+        evaluations.append((float(auc) if auc is not None else -np.inf, weight))
+    _, selected = min(evaluations, key=lambda item: (-item[0], abs(item[1] - 0.5), item[1]))
+    return replace(specification, hybrid_weight=selected)
+
+
+def _reference_embedding_mse(
+    model: DistributionClassifier,
+    observed: Any,
+    reference: Any,
+) -> float:
+    """Compare finite-bag RFF embeddings with independent large reference bags."""
+    observed_embeddings = np.asarray(model.embedding_vectors(observed), dtype=float)
+    reference_embeddings = np.asarray(
+        model.embedding_vectors(reference, apply_shrinkage=False), dtype=float
+    )
+    if observed_embeddings.shape != reference_embeddings.shape:
+        raise ValueError("Observed and reference embeddings must align")
+    squared_errors = np.sum((observed_embeddings - reference_embeddings) ** 2, axis=1)
+    return float(np.mean(squared_errors))
 
 
 def _record_oof_predictions(
@@ -352,6 +482,7 @@ def run_lab(
     progress: bool = False,
 ) -> Dict[str, Any]:
     """Run all expanded cases and return a strict-JSON-compatible result."""
+    clear_rff_frequency_cache()
     cases = expand_cases(configuration)
     selected = list(range(len(cases))) if case_indices is None else list(case_indices)
     if any(index < 0 or index >= len(cases) for index in selected):
@@ -366,11 +497,12 @@ def run_lab(
             )
         results.append(run_case(cases[index], configuration, index))
     return {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "configuration": dict(configuration),
         "configuration_sha256": configuration_fingerprint(configuration),
         "interpretation": "synthetic presence-background relative ranking",
         "environment": environment_manifest(repository),
+        "rff_frequency_cache": rff_frequency_cache_info(),
         "cases": results,
     }
 

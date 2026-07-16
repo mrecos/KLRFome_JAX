@@ -95,6 +95,7 @@ def generate_synthetic_bags(config: SyntheticScenarioConfig) -> BagDataset:
                         "scenario": config.scenario,
                         "effect_size": config.effect_size,
                         "spatial_range": config.spatial_range,
+                        "spatial_correlation_range": config.spatial_range,
                     },
                 )
             )

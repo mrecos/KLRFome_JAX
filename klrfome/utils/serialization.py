@@ -102,6 +102,8 @@ def _encode_core(core: DistributionClassifier) -> tuple[Dict[str, Any], Dict[str
         arrays["training_embeddings"] = _finite_array(core.training_embeddings_)
     if core.training_shrinkage_factors_ is not None:
         arrays["training_shrinkage_factors"] = _finite_array(core.training_shrinkage_factors_)
+    if core.training_effective_sizes_ is not None:
+        arrays["training_effective_sizes"] = _finite_array(core.training_effective_sizes_)
     if core._sw is not None and core._sw._projections is not None:
         arrays["wasserstein_projections"] = _finite_array(core._sw._projections)
     needs_reference_bags = core.spec.representation in (
@@ -217,6 +219,10 @@ def _decode_core(
             core.training_shrinkage_factors_ = jnp.asarray(
                 _required_array(arrays, "training_shrinkage_factors")
             )
+        if "training_effective_sizes" in arrays:
+            core.training_effective_sizes_ = jnp.asarray(
+                _required_array(arrays, "training_effective_sizes")
+            )
         if spec.solver == "dual_klr":
             core.training_embeddings_ = jnp.asarray(_required_array(arrays, "training_embeddings"))
     elif spec.representation == "hybrid":
@@ -242,6 +248,10 @@ def _decode_core(
             if "training_shrinkage_factors" in arrays:
                 core.training_shrinkage_factors_ = jnp.asarray(
                     _required_array(arrays, "training_shrinkage_factors")
+                )
+            if "training_effective_sizes" in arrays:
+                core.training_effective_sizes_ = jnp.asarray(
+                    _required_array(arrays, "training_effective_sizes")
                 )
         else:
             core._mean_kernel = MeanEmbeddingKernel(RBFKernel(float(core.point_sigma_)))

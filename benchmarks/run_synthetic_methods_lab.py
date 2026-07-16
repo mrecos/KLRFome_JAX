@@ -19,6 +19,7 @@ from klrfome.data.synthetic import (
     generate_synthetic_bags,
     permute_bag_cells,
 )
+from klrfome.kernels.rff import clear_rff_frequency_cache, rff_frequency_cache_info
 from klrfome.models.baselines import baseline_models
 from klrfome.models.distribution import DistributionClassifier
 from klrfome.models.spec import ModelSpec
@@ -94,6 +95,10 @@ def method_specifications(configuration: Mapping[str, Any]) -> Dict[str, ModelSp
         rff_scheme = str(item.get("rff_scheme", "iid"))
         embedding_estimator = str(item.get("embedding_estimator", "empirical"))
         shrinkage_effective_size = str(item.get("shrinkage_effective_size", "nominal"))
+        configured_spatial_range = item.get("shrinkage_spatial_range")
+        shrinkage_spatial_range = (
+            float(configured_spatial_range) if configured_spatial_range is not None else None
+        )
         if method == "M0":
             spec = ModelSpec.m0()
         elif method == "M1":
@@ -102,6 +107,7 @@ def method_specifications(configuration: Mapping[str, Any]) -> Dict[str, ModelSp
                 rff_scheme=rff_scheme,
                 embedding_estimator=embedding_estimator,
                 shrinkage_effective_size=shrinkage_effective_size,
+                shrinkage_spatial_range=shrinkage_spatial_range,
             )
         elif method == "M2":
             spec = ModelSpec.m2(
@@ -109,6 +115,7 @@ def method_specifications(configuration: Mapping[str, Any]) -> Dict[str, ModelSp
                 rff_scheme=rff_scheme,
                 embedding_estimator=embedding_estimator,
                 shrinkage_effective_size=shrinkage_effective_size,
+                shrinkage_spatial_range=shrinkage_spatial_range,
             )
         elif method == "M3":
             spec = ModelSpec.m3(
@@ -124,6 +131,7 @@ def method_specifications(configuration: Mapping[str, Any]) -> Dict[str, ModelSp
                 rff_scheme=rff_scheme,
                 embedding_estimator=embedding_estimator,
                 shrinkage_effective_size=shrinkage_effective_size,
+                shrinkage_spatial_range=shrinkage_spatial_range,
                 n_projections=int(item.get("n_projections", 64)),
                 n_quantiles=int(item.get("n_quantiles", 64)),
                 hybrid_normalize=bool(item.get("hybrid_normalize", True)),
@@ -153,6 +161,7 @@ def run_case(
         group_ids=groups,
     )
     specifications = method_specifications(configuration)
+    model_seed = int(configuration.get("model_seed", case.seed))
     method_items = {str(item.get("id", item["method"])): item for item in configuration["methods"]}
     rows: List[Dict[str, Any]] = []
     oof_scores: Dict[Tuple[str, int], Dict[int, float]] = {}
@@ -176,12 +185,12 @@ def run_case(
                 train,
                 configuration,
                 case.seed + assignment.repeat * 1009 + assignment.fold,
-                case.seed,
+                model_seed,
             )
             model = DistributionClassifier(
                 fitted_spec,
                 lambda_reg=float(configuration.get("lambda_reg", 0.1)),
-                seed=case.seed,
+                seed=model_seed,
                 round_exact_kernel=False,
             )
             tracemalloc.start()
@@ -233,7 +242,7 @@ def run_case(
         )
         if bool(configuration.get("include_baselines", True)):
             for method_id, baseline in baseline_models(
-                seed=case.seed,
+                seed=model_seed,
                 rf_estimators=int(configuration.get("rf_estimators", 200)),
                 include_mean_std=bool(configuration.get("include_mean_std_baseline", True)),
             ).items():
@@ -299,7 +308,7 @@ def run_case(
             pairing_keys=("repeat",),
         ),
         "invariance": (
-            run_invariance_checks(dataset, specifications, configuration, case.seed)
+            run_invariance_checks(dataset, specifications, configuration, model_seed)
             if bool(configuration.get("run_invariance_checks", False))
             else None
         ),
@@ -473,6 +482,7 @@ def run_lab(
     progress: bool = False,
 ) -> Dict[str, Any]:
     """Run all expanded cases and return a strict-JSON-compatible result."""
+    clear_rff_frequency_cache()
     cases = expand_cases(configuration)
     selected = list(range(len(cases))) if case_indices is None else list(case_indices)
     if any(index < 0 or index >= len(cases) for index in selected):
@@ -492,6 +502,7 @@ def run_lab(
         "configuration_sha256": configuration_fingerprint(configuration),
         "interpretation": "synthetic presence-background relative ranking",
         "environment": environment_manifest(repository),
+        "rff_frequency_cache": rff_frequency_cache_info(),
         "cases": results,
     }
 

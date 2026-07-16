@@ -22,6 +22,13 @@ from klrfome.utils.serialization import load_model, save_model
         ModelSpec.m0(),
         ModelSpec.m1(12),
         ModelSpec.m1(12, rff_scheme="orthogonal", embedding_estimator="shrinkage"),
+        ModelSpec.m1(
+            12,
+            rff_scheme="orthogonal",
+            embedding_estimator="shrinkage",
+            shrinkage_effective_size="spatial",
+            shrinkage_spatial_range=2.0,
+        ),
         ModelSpec.m2(12),
         ModelSpec.m3(8, 8),
         ModelSpec.m4(

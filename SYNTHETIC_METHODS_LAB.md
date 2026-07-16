@@ -75,6 +75,13 @@ python benchmarks/run_synthetic_methods_lab.py \
   --config benchmarks/synthetic_lab_extensions_config.json
 ```
 
+Run the focused coordinate-shrinkage follow-up:
+
+```bash
+python benchmarks/run_synthetic_methods_lab.py \
+  --config benchmarks/synthetic_lab_spatial_shrinkage_config.json
+```
+
 Run one or more zero-based cases reported by `--list-cases`:
 
 ```bash
@@ -95,8 +102,28 @@ distribution. Their fitted-preprocessor, unshrunk RFF means estimate the populat
 `embedding_mse`. M4 mixture weights are chosen by grouped inner validation using only the outer
 training fold. The outer test fold therefore remains untouched by weight selection.
 
+The focused spatial-shrinkage suite uses each bag's coordinates and an explicit exponential
+correlation range to compute the independent-cell equivalent of its equally weighted mean:
+
+\[
+n_{eff}=n^2/(\mathbf{1}^{T}R\mathbf{1}), \qquad R_{ij}=\exp(-d_{ij}/\rho).
+\]
+
+Duplicate coordinates are counted once. A zero range returns the unique-cell count. Positive
+ranges reduce effective size as correlation increases. The range can be fixed in `ModelSpec` or
+read from bag metadata; it is not automatically estimated from one bag. This prevents the
+synthetic laboratory from confusing a configured dependence model with a reliable empirical
+range estimator.
+
+ORF initialization caches the bandwidth-free frequency matrix for a seed, input dimension, and
+feature count. The fitted training-fold bandwidth is still applied separately, so caching removes
+repeated QR work without sharing fitted preprocessing or bandwidths across folds. Cache counters
+and initialization timing are recorded in results and model diagnostics.
+
 The first complete core-run interpretation is recorded in
 [Synthetic Laboratory Core Results](SYNTHETIC_LAB_RESULTS_2026-07-15.md).
+The 90-case representation-extension interpretation and focused follow-up rationale are recorded in
+[Synthetic Laboratory Extension Results](SYNTHETIC_LAB_EXTENSION_RESULTS_2026-07-16.md).
 
 ## Reproducibility and fitted archives
 

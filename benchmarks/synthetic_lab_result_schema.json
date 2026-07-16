@@ -14,6 +14,16 @@
     "configuration": {"type": "object"},
     "configuration_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "environment": {"type": "object"},
+    "rff_frequency_cache": {
+      "type": "object",
+      "required": ["hits", "misses", "maxsize", "currsize"],
+      "properties": {
+        "hits": {"type": "integer", "minimum": 0},
+        "misses": {"type": "integer", "minimum": 0},
+        "maxsize": {"type": "integer", "minimum": 0},
+        "currsize": {"type": "integer", "minimum": 0}
+      }
+    },
     "cases": {
       "type": "array",
       "items": {

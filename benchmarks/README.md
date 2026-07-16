@@ -19,6 +19,12 @@ shrinkage embeddings, population-reference error, and nested M4 hybrid-weight se
 passes, `synthetic_lab_extensions_config.json` runs the replicated research design. M4 tuning uses
 grouped inner folds drawn only from each outer training fold.
 
+`synthetic_lab_spatial_shrinkage_config.json` is the 40-case focused follow-up. It compares nominal
+and coordinate-aware shrinkage under independent, small-bag, and spatially correlated sampling.
+The runner fixes the model seed across cases so ORF approximation noise is controlled and its
+bandwidth-free frequency cache can be reused; synthetic data seeds and fold plans still vary by
+case.
+
 See [Synthetic Methods Laboratory](../SYNTHETIC_METHODS_LAB.md) for scenario definitions,
 diagnostics, reproducibility behavior, and interpretation.
 

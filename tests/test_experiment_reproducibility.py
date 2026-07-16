@@ -7,7 +7,11 @@ import numpy as np
 import pytest
 from jsonschema import validate
 
-from benchmarks.run_synthetic_methods_lab import expand_cases, run_lab
+from benchmarks.run_synthetic_methods_lab import (
+    expand_cases,
+    method_specifications,
+    run_lab,
+)
 from klrfome.data.synthetic import (
     SyntheticScenarioConfig,
     generate_reference_bags,
@@ -173,6 +177,21 @@ def test_representation_extension_configuration_expands_to_documented_cases():
     assert sum(case.scenario == "null" for case in cases) == 20
     assert sum(case.scenario == "moment_matched_xor" for case in cases) == 12
     assert sum(case.unequal_bag_sizes for case in cases) == 5
+
+
+def test_spatial_shrinkage_configuration_is_focused_and_uses_fixed_model_seed():
+    configuration_path = (
+        Path(__file__).parents[1] / "benchmarks/synthetic_lab_spatial_shrinkage_config.json"
+    )
+    configuration = json.loads(configuration_path.read_text())
+    cases = expand_cases(configuration)
+    specifications = method_specifications(configuration)
+    assert len(cases) == 40
+    assert configuration["model_seed"] == 42
+    assert len(specifications) == 5
+    spatial = specifications["M1-orf128-shrink-spatial"]
+    assert spatial.shrinkage_effective_size == "spatial"
+    assert spatial.shrinkage_spatial_range is None
 
 
 def test_reference_bags_preserve_case_states_with_larger_independent_samples():

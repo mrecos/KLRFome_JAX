@@ -2,10 +2,15 @@
 
 import jax.numpy as jnp
 import jax.random as random
+import numpy as np
 import pytest
 
 from klrfome.kernels.rbf import RBFKernel
-from klrfome.kernels.rff import RandomFourierFeatures
+from klrfome.kernels.rff import (
+    RandomFourierFeatures,
+    clear_rff_frequency_cache,
+    rff_frequency_cache_info,
+)
 from klrfome.kernels.distribution import MeanEmbeddingKernel
 
 
@@ -167,3 +172,21 @@ def test_orthogonal_rff_is_deterministic_and_block_orthogonal():
 def test_rff_rejects_unknown_frequency_scheme():
     with pytest.raises(ValueError, match="scheme"):
         RandomFourierFeatures(scheme="unsupported")
+
+
+def test_orthogonal_frequency_cache_reuses_bandwidth_free_draws():
+    clear_rff_frequency_cache()
+    first = RandomFourierFeatures(sigma=1.5, n_features=17, seed=29, scheme="orthogonal")
+    first._initialize_weights(4)
+    assert first.frequency_cache_hit is False
+    assert rff_frequency_cache_info()["misses"] == 1
+
+    second = RandomFourierFeatures(sigma=0.75, n_features=17, seed=29, scheme="orthogonal")
+    second._initialize_weights(4)
+    assert second.frequency_cache_hit is True
+    assert rff_frequency_cache_info()["hits"] == 1
+    np.testing.assert_allclose(
+        np.asarray(first._W) * first.sigma,
+        np.asarray(second._W) * second.sigma,
+        atol=0,
+    )

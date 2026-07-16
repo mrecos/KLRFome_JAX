@@ -221,6 +221,47 @@ def test_metadata_effective_size_is_explicit_and_validated():
     assert np.isfinite(np.asarray(fitted.training_shrinkage_factors_)).all()
 
 
+def test_spatial_effective_size_uses_coordinates_and_explicit_range():
+    dataset = _dataset()
+    missing_range = ModelSpec.m1(
+        24,
+        embedding_estimator="shrinkage",
+        shrinkage_effective_size="spatial",
+    )
+    with pytest.raises(ValueError, match="spatial correlation range"):
+        DistributionClassifier(missing_range).fit(dataset)
+
+    short_range = DistributionClassifier(
+        ModelSpec.m1(
+            24,
+            embedding_estimator="shrinkage",
+            shrinkage_effective_size="spatial",
+            shrinkage_spatial_range=0.5,
+        )
+    ).fit(dataset)
+    long_range = DistributionClassifier(
+        ModelSpec.m1(
+            24,
+            embedding_estimator="shrinkage",
+            shrinkage_effective_size="spatial",
+            shrinkage_spatial_range=5.0,
+        )
+    ).fit(dataset)
+    assert np.mean(long_range.training_effective_sizes_) < np.mean(
+        short_range.training_effective_sizes_
+    )
+    assert np.mean(long_range.training_shrinkage_factors_) < np.mean(
+        short_range.training_shrinkage_factors_
+    )
+
+    duplicated = duplicate_all_cells(dataset, repeats=3)
+    np.testing.assert_allclose(
+        long_range.predict_bags(duplicated),
+        long_range.predict_bags(dataset),
+        atol=2e-6,
+    )
+
+
 def test_hybrid_raw_endpoints_reproduce_component_gram_matrices():
     dataset = _dataset()
     common = {"seed": 15, "round_exact_kernel": False}

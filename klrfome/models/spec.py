@@ -1,6 +1,7 @@
 """Validated model configurations for distribution-regression architectures."""
 
 from dataclasses import dataclass
+import math
 from typing import Literal, Optional
 
 Representation = Literal["exact_kme", "rff_kme", "sliced_wasserstein", "hybrid"]
@@ -8,7 +9,7 @@ DecisionKernel = Literal["linear", "rbf", "hybrid"]
 Solver = Literal["dual_klr", "primal_logistic"]
 RFFScheme = Literal["iid", "orthogonal"]
 EmbeddingEstimator = Literal["empirical", "shrinkage"]
-ShrinkageEffectiveSize = Literal["nominal", "metadata"]
+ShrinkageEffectiveSize = Literal["nominal", "metadata", "spatial"]
 HybridMeanRepresentation = Literal["exact_kme", "rff_kme"]
 
 
@@ -26,6 +27,7 @@ class ModelSpec:
     rff_scheme: RFFScheme = "iid"
     embedding_estimator: EmbeddingEstimator = "empirical"
     shrinkage_effective_size: ShrinkageEffectiveSize = "nominal"
+    shrinkage_spatial_range: Optional[float] = None
     hybrid_weight: float = 0.5
     hybrid_mean_representation: HybridMeanRepresentation = "rff_kme"
     hybrid_normalize: bool = True
@@ -50,8 +52,14 @@ class ModelSpec:
             raise ValueError("rff_scheme must be 'iid' or 'orthogonal'")
         if self.embedding_estimator not in ("empirical", "shrinkage"):
             raise ValueError("embedding_estimator must be 'empirical' or 'shrinkage'")
-        if self.shrinkage_effective_size not in ("nominal", "metadata"):
-            raise ValueError("shrinkage_effective_size must be 'nominal' or 'metadata'")
+        if self.shrinkage_effective_size not in ("nominal", "metadata", "spatial"):
+            raise ValueError("shrinkage_effective_size must be 'nominal', 'metadata', or 'spatial'")
+        if self.shrinkage_spatial_range is not None and (
+            not math.isfinite(self.shrinkage_spatial_range) or self.shrinkage_spatial_range < 0
+        ):
+            raise ValueError("shrinkage_spatial_range must be finite and nonnegative")
+        if self.shrinkage_spatial_range is not None and self.shrinkage_effective_size != "spatial":
+            raise ValueError("shrinkage_spatial_range is only valid with spatial effective size")
         if not 0.0 <= self.hybrid_weight <= 1.0:
             raise ValueError("hybrid_weight must be in [0, 1]")
         if self.hybrid_mean_representation not in ("exact_kme", "rff_kme"):
@@ -68,8 +76,10 @@ class ModelSpec:
             raise ValueError("rff_scheme is only valid for an RFF mean representation")
         if not uses_rff and self.embedding_estimator != "empirical":
             raise ValueError("shrinkage currently requires an RFF mean representation")
-        if self.embedding_estimator == "empirical" and self.shrinkage_effective_size != "nominal":
-            raise ValueError("metadata effective size is only valid with shrinkage")
+        if self.embedding_estimator == "empirical" and (
+            self.shrinkage_effective_size != "nominal" or self.shrinkage_spatial_range is not None
+        ):
+            raise ValueError("non-nominal effective size is only valid with shrinkage")
 
     @property
     def method_id(self) -> str:
@@ -93,6 +103,7 @@ class ModelSpec:
         rff_scheme: RFFScheme = "iid",
         embedding_estimator: EmbeddingEstimator = "empirical",
         shrinkage_effective_size: ShrinkageEffectiveSize = "nominal",
+        shrinkage_spatial_range: Optional[float] = None,
     ) -> "ModelSpec":
         return cls(
             "rff_kme",
@@ -102,6 +113,7 @@ class ModelSpec:
             rff_scheme=rff_scheme,
             embedding_estimator=embedding_estimator,
             shrinkage_effective_size=shrinkage_effective_size,
+            shrinkage_spatial_range=shrinkage_spatial_range,
         )
 
     @classmethod
@@ -111,6 +123,7 @@ class ModelSpec:
         rff_scheme: RFFScheme = "iid",
         embedding_estimator: EmbeddingEstimator = "empirical",
         shrinkage_effective_size: ShrinkageEffectiveSize = "nominal",
+        shrinkage_spatial_range: Optional[float] = None,
     ) -> "ModelSpec":
         return cls(
             "rff_kme",
@@ -120,6 +133,7 @@ class ModelSpec:
             rff_scheme=rff_scheme,
             embedding_estimator=embedding_estimator,
             shrinkage_effective_size=shrinkage_effective_size,
+            shrinkage_spatial_range=shrinkage_spatial_range,
         )
 
     @classmethod
@@ -142,6 +156,7 @@ class ModelSpec:
         rff_scheme: RFFScheme = "iid",
         embedding_estimator: EmbeddingEstimator = "empirical",
         shrinkage_effective_size: ShrinkageEffectiveSize = "nominal",
+        shrinkage_spatial_range: Optional[float] = None,
         n_projections: int = 100,
         n_quantiles: int = 128,
         hybrid_normalize: bool = True,
@@ -158,6 +173,7 @@ class ModelSpec:
             rff_scheme=rff_scheme,
             embedding_estimator=embedding_estimator,
             shrinkage_effective_size=shrinkage_effective_size,
+            shrinkage_spatial_range=shrinkage_spatial_range,
             hybrid_weight=hybrid_weight,
             hybrid_mean_representation=hybrid_mean_representation,
             hybrid_normalize=hybrid_normalize,

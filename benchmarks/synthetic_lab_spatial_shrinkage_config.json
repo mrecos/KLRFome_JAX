@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "suite": "spatial-shrinkage-and-orf-cache",
+  "seed": 42,
+  "model_seed": 42,
+  "n_bags_per_class": 24,
+  "n_features": 4,
+  "bag_size": 30,
+  "replicates": 1,
+  "n_splits": 4,
+  "n_repeats": 1,
+  "reference_bag_size": 1000,
+  "lambda_reg": 0.1,
+  "include_baselines": false,
+  "run_invariance_checks": false,
+  "methods": [
+    {"id": "M0", "method": "M0"},
+    {"id": "M1-iid128", "method": "M1", "rff_features": 128},
+    {
+      "id": "M1-orf128",
+      "method": "M1",
+      "rff_features": 128,
+      "rff_scheme": "orthogonal"
+    },
+    {
+      "id": "M1-orf128-shrink-nominal",
+      "method": "M1",
+      "rff_features": 128,
+      "rff_scheme": "orthogonal",
+      "embedding_estimator": "shrinkage"
+    },
+    {
+      "id": "M1-orf128-shrink-spatial",
+      "method": "M1",
+      "rff_features": 128,
+      "rff_scheme": "orthogonal",
+      "embedding_estimator": "shrinkage",
+      "shrinkage_effective_size": "spatial"
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario": "null",
+      "effect_sizes": [0.0],
+      "spatial_ranges": [0.0, 5.0],
+      "replicates": 4
+    },
+    {
+      "scenario": "mean_shift",
+      "effect_sizes": [0.25],
+      "bag_sizes": [3, 5, 10, 30],
+      "spatial_range": 0.0,
+      "replicates": 4
+    },
+    {
+      "scenario": "mean_shift",
+      "effect_sizes": [0.25],
+      "bag_size": 30,
+      "spatial_ranges": [0.0, 1.5, 5.0, 10.0],
+      "replicates": 4
+    }
+  ],
+  "output": "benchmark_data/synthetic_lab_spatial_shrinkage_results.json"
+}

@@ -210,6 +210,7 @@ Open methodological decisions include:
 - [Synthetic methods laboratory](SYNTHETIC_METHODS_LAB.md)
 - [Synthetic laboratory core results (2026-07-15)](SYNTHETIC_LAB_RESULTS_2026-07-15.md)
 - [Representation extensions sprint (2026-07-15)](REPRESENTATION_EXTENSIONS_2026-07-15.md)
+- [Synthetic laboratory extension results (2026-07-16)](SYNTHETIC_LAB_EXTENSION_RESULTS_2026-07-16.md)
 - [Synthetic methods notebook](notebooks/06_synthetic_methods_lab.ipynb)
 - [R-to-Python/JAX methodological comparison](COMPARISON_R_vs_JAX.md)
 - [Synthetic example data](example_data/README.md)

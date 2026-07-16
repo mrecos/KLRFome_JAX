@@ -4,7 +4,7 @@
 
 **Branch:** `codex/representation-extensions`
 
-**Status:** Implemented; extension smoke suite passed; replicated research run remains user-run
+**Status:** Implemented; extension smoke and 90-case replicated research suites completed
 
 ## Purpose
 
@@ -105,6 +105,11 @@ deliberately higher because M4 performs nested validation.
 The notebook mode `extensions_smoke` should be run first. Change it to `extensions` only after the
 smoke output is interpretable. Generated results remain under ignored `benchmark_data/`.
 
+The completed 90-case interpretation is recorded in
+[Synthetic Laboratory Extension Results](SYNTHETIC_LAB_EXTENSION_RESULTS_2026-07-16.md). ORF improved
+equal-budget fidelity, nominal shrinkage helped small bags, coordinate dependence exposed the limits
+of unique-cell count, and M4 remained experimental.
+
 A bounded pilot of four full-size cases (null, moment-matched XOR, three-cell mean shift, and
 spatially dependent mean shift) also completed on 2026-07-15. All 192 fold-method records had
 finite AUC and PR AUC. Across this deliberately small pilot, shrinkage had the lowest mean
@@ -126,9 +131,24 @@ No extension is promoted or removed based on synthetic results alone. Successful
 to mapped Section 6 validation before any default changes. ARD/grouped kernels remain the next
 unimplemented direction for sparse-signal problems.
 
+## Focused spatial follow-up
+
+The replicated run motivated two bounded implementation changes:
+
+- coordinate-aware effective sample size for shrinkage, using the variance of the equally weighted
+  spatial mean under an explicit exponential correlation range; and
+- cached bandwidth-free ORF draws keyed by seed, input dimension, and feature count, with the
+  training-fold bandwidth applied after cache retrieval.
+
+The focused `synthetic_lab_spatial_shrinkage_config.json` run is the gate before Section 6 changes.
+It must recover nominal bag size at zero correlation, reduce effective size monotonically as the
+configured range increases, and report paired population-reference embedding MSE against nominal
+shrinkage. The correlation range remains explicit; estimating it from empirical bags is deferred.
+
 ## Method references
 
 - Yu et al. (2016), [Orthogonal Random Features](https://proceedings.neurips.cc/paper/2016/hash/53adaf494dc89ef7196d73636eb2451b-Abstract.html).
+- Griffith (2005), [Effective Geographic Sample Size in the Presence of Spatial Autocorrelation](https://onlinelibrary.wiley.com/doi/abs/10.1111/j.1467-8306.2005.00484.x).
 - Muandet et al. (2014), [Kernel Mean Estimation and Stein's Effect](https://proceedings.mlr.press/v32/muandet14.html).
 - Wolfer and Alquier (2025), [Variance-Aware Estimation of Kernel Mean Embedding](https://www.jmlr.org/papers/v26/23-0161.html).
 - Rakotomamonjy et al. (2008), [SimpleMKL](https://www.jmlr.org/papers/v9/rakotomamonjy08a.html). The present M4 uses a small leakage-safe grid rather than a learned SimpleMKL optimizer.

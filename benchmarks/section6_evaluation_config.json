@@ -1,0 +1,37 @@
+{
+  "schema_version": "2.0",
+  "data_root": "site_data/r91_section_6_data",
+  "settings": {
+    "riverine": {
+      "csv": "CSV_data/r91_all_riverine_section_6_regression_data_SITENO.csv",
+      "raster_directory": "subarea_raster_TIFs/riverine_section_6"
+    },
+    "upland": {
+      "csv": "CSV_data/r91_all_upland_section_6_regression_data_SITENO.csv",
+      "raster_directory": "subarea_raster_TIFs/upland_section_6"
+    }
+  },
+  "study_design": "presence_background",
+  "min_cells": 3,
+  "cell_cap": 120,
+  "background_ratio": 1.0,
+  "support_windows": [7, 9, 11],
+  "primary_window": 7,
+  "availability_sample_size": 1000,
+  "availability_seed": 6142,
+  "area_fractions": [0.05, 0.10, 0.20],
+  "boyce_windows": 20,
+  "boyce_window_fraction": 0.10,
+  "spatial_neighbors": 8,
+  "spatial_permutations": 999,
+  "spatial_fdr_alpha": 0.05,
+  "n_splits": 5,
+  "n_repeats": 2,
+  "seed": 42,
+  "lambda_reg": 0.1,
+  "rff_features": 128,
+  "wasserstein_projections": 64,
+  "wasserstein_quantiles": 64,
+  "rf_estimators": 500,
+  "output": "site_data/r91_section_6_data/section6_evaluation/results.json"
+}

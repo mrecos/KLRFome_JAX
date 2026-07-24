@@ -178,14 +178,18 @@ the same immutable fold plan.
 
 Useful presence-background diagnostics include:
 
+- mapped-area capture, lift, and capture surplus as the primary operating-point evidence;
+- continuous Boyce index and held-out site availability percentiles;
+- Kvamme Gain as a secondary archaeological crosswalk that is redundant with lift;
 - ROC AUC as a secondary ranking summary;
-- PR AUC, interpreted relative to the constructed background prevalence;
-- continuous Boyce index;
-- top-area capture and lift; and
+- PR AUC, interpreted relative to the constructed background prevalence; and
 - direct inspection of mapped predictions.
 
 Mapped predictions are especially important because spatial artifacts and support mismatches can
 be difficult to identify from aggregate metrics alone.
+The Section 6 workflow also uses geometry-controlled sensitivities plus exploratory Moran/LISA
+diagnostics of held-out site failures and model disagreement; spatial clustering of the raw focal
+prediction surface is not treated as evidence of accuracy.
 
 ## Project status
 
@@ -206,6 +210,7 @@ Open methodological decisions include:
 - [Model and data foundation](MODEL_DATA_FOUNDATION.md)
 - [Methods status and roadmap](METHODS_ROADMAP_2026-07-13.md)
 - [Section 6 comparison summary](SECTION6_COMPARISON_SUMMARY_2026-07-13.md)
+- [Section 6 evaluation contract](SECTION6_EVALUATION_2026-07-16.md)
 - [Section 6 validation notebook](notebooks/05_section6_model_validation.ipynb)
 - [Synthetic methods laboratory](SYNTHETIC_METHODS_LAB.md)
 - [Synthetic laboratory core results (2026-07-15)](SYNTHETIC_LAB_RESULTS_2026-07-15.md)

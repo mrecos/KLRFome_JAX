@@ -1,5 +1,6 @@
 """Lazy, alignment-validated raster ingestion and spatial bag construction."""
 
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, List, Literal, Optional, Sequence, Set, Tuple, cast
@@ -82,6 +83,23 @@ class RasterSource:
         assert valid is not None
         return np.stack(values, axis=0), valid
 
+    def read_windows(self, windows: Iterable[Window]) -> Iterable[Tuple[np.ndarray, np.ndarray]]:
+        """Read many windows while reusing one open handle per raster band."""
+        with ExitStack() as stack:
+            sources = [stack.enter_context(rasterio.open(path)) for path in self.paths]
+            for window in windows:
+                values: List[np.ndarray] = []
+                valid = None
+                for source in sources:
+                    band = source.read(1, window=window, masked=True)
+                    data = np.asarray(band.filled(np.nan), dtype=float)
+                    band_valid = ~np.ma.getmaskarray(band) & np.isfinite(data)
+                    values.append(data)
+                    valid = band_valid if valid is None else valid & band_valid
+                self.read_log.append(window)
+                assert valid is not None
+                yield np.stack(values, axis=0), valid
+
     def iter_windows(self, block_size: int = 512) -> Iterable[Window]:
         for row_off in range(0, self.height, block_size):
             for col_off in range(0, self.width, block_size):
@@ -93,7 +111,17 @@ class RasterSource:
                 )
 
     def valid_mask(self, window: Optional[Window] = None) -> np.ndarray:
-        return self.read_window(window)[1]
+        """Return the all-band validity intersection without stacking raster values."""
+        valid = None
+        for path in self.paths:
+            with rasterio.open(path) as source:
+                band = source.read(1, window=window, masked=True)
+            data = np.asarray(band.data)
+            band_valid = ~np.ma.getmaskarray(band) & np.isfinite(data)
+            valid = band_valid if valid is None else valid & band_valid
+        assert valid is not None
+        self.read_log.append(window)
+        return valid
 
     def sample_points(self, coordinates: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Sample all bands at x/y pairs and return values, validity, and cell indices."""

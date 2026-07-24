@@ -39,13 +39,17 @@ jobs:
         if: matrix.python-version == '3.12'
         run: >-
           python -m black --check klrfome tests examples
-          benchmarks/run_section6_sensitivity.py benchmarks/run_synthetic_methods_lab.py
+          benchmarks/build_section6_evaluation_notebook.py
+          benchmarks/run_section6_evaluation.py benchmarks/run_section6_sensitivity.py
+          benchmarks/run_synthetic_methods_lab.py
 
       - name: Run Ruff
         if: matrix.python-version == '3.12'
         run: >-
           python -m ruff check klrfome tests examples
-          benchmarks/run_section6_sensitivity.py benchmarks/run_synthetic_methods_lab.py
+          benchmarks/build_section6_evaluation_notebook.py
+          benchmarks/run_section6_evaluation.py benchmarks/run_section6_sensitivity.py
+          benchmarks/run_synthetic_methods_lab.py
 
       - name: Run Mypy
         if: matrix.python-version == '3.12'

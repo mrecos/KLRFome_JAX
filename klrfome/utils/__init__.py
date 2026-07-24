@@ -9,7 +9,11 @@ from .scaling import (
 )
 from .validation import CM_quads, cohens_kappa, metrics, compute_roc_auc, cross_validate
 from .evaluation import (
+    availability_capture_metrics,
+    availability_percentile_ranks,
     boyce_index,
+    continuous_boyce_from_availability,
+    spatial_autocorrelation_diagnostics,
     kernel_approximation_diagnostics,
     paired_method_differences,
     presence_background_metrics,
@@ -39,6 +43,10 @@ __all__ = [
     "compute_roc_auc",
     "cross_validate",
     "boyce_index",
+    "availability_percentile_ranks",
+    "availability_capture_metrics",
+    "continuous_boyce_from_availability",
+    "spatial_autocorrelation_diagnostics",
     "presence_background_metrics",
     "paired_method_differences",
     "replicate_summary",

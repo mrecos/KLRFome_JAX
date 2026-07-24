@@ -5,13 +5,17 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 import rasterio
 from jsonschema import validate
 from rasterio.transform import from_origin
 
 from benchmarks.run_section6_evaluation import (
+    _annotate_mask_boundary_distances,
     build_focal_availability_datasets,
     evaluate_design,
+    full_window_only_dataset,
+    matched_cell_count_dataset,
 )
 from klrfome.data.formats import Bag, BagDataset
 from klrfome.io.raster_source import RasterSource
@@ -69,6 +73,9 @@ def _configuration():
         "area_fractions": [0.05, 0.10, 0.20],
         "boyce_windows": 10,
         "boyce_window_fraction": 0.2,
+        "spatial_neighbors": 2,
+        "spatial_permutations": 19,
+        "spatial_fdr_alpha": 0.05,
     }
 
 
@@ -161,10 +168,11 @@ def test_evaluation_pools_each_bag_once_and_uses_availability_percentiles():
         availability,
         plan,
         _configuration(),
-        selected_methods=["M1", "LR-mean"],
+        selected_methods=["M0", "M1", "LR-mean"],
     )
-    assert len(result["fold_results"]) == 2 * len(plan.assignments)
-    assert len(result["pooled_repeat_results"]) == 4
+    assert len(result["fold_results"]) == 3 * len(plan.assignments)
+    assert len(result["pooled_repeat_results"]) == 6
+    assert len(result["availability_disagreement_vs_M0"]) == 4
     for row in result["pooled_repeat_results"]:
         assert row["n_observations"] == dataset.n_locations
         assert len(set(row["bag_ids"])) == dataset.n_locations
@@ -172,3 +180,72 @@ def test_evaluation_pools_each_bag_once_and_uses_availability_percentiles():
         assert 0 <= max(row["availability_percentiles"]) <= 1
         assert row["capture_5_percent"] <= row["capture_10_percent"]
         assert row["capture_10_percent"] <= row["capture_20_percent"]
+        assert row["capture_surplus_10_percent"] == pytest.approx(
+            row["capture_10_percent"] - row["achieved_area_10_percent"]
+        )
+
+
+def _variable_size_dataset() -> BagDataset:
+    bags = []
+    for label, sizes in ((1, [9, 9, 8, 6]), (0, [9, 9, 9, 7])):
+        for index, size in enumerate(sizes):
+            coordinates = np.column_stack([np.arange(size, dtype=float), np.full(size, index)])
+            bags.append(
+                Bag(
+                    jnp.ones((size, 2)) * (label + index),
+                    label,
+                    f"{label}-{index}",
+                    coordinates=jnp.asarray(coordinates),
+                    metadata={
+                        "window_size": 3,
+                        "cell_indices": np.column_stack(
+                            [np.arange(size), np.arange(size)]
+                        ).tolist(),
+                    },
+                )
+            )
+    return BagDataset(bags, ["a", "b"], crs="EPSG:26918")
+
+
+def test_geometry_sensitivities_require_complete_windows_and_match_counts():
+    dataset = _variable_size_dataset()
+    complete, complete_audit = full_window_only_dataset(dataset, 3, seed=4)
+    assert complete.n_sites == complete.n_background == 2
+    assert {bag.n_samples for bag in complete.collections} == {9}
+    assert complete_audit["required_cells"] == 9
+
+    matched, matched_audit = matched_cell_count_dataset(dataset, seed=4)
+    site_sizes = sorted(bag.n_samples for bag in matched.collections if bag.label == 1)
+    background_sizes = sorted(bag.n_samples for bag in matched.collections if bag.label == 0)
+    assert site_sizes == background_sizes
+    assert matched_audit["site_cell_sizes"] == matched_audit["background_cell_sizes"]
+
+
+def test_mask_boundary_distance_is_attached_to_anchor_bags(tmp_path):
+    values = np.ones((9, 9), dtype=float)
+    values[:, 0] = -9999.0
+    source = RasterSource(
+        [_write(tmp_path / "mask-a.tif", values), _write(tmp_path / "mask-b.tif", values)],
+        band_names=["a", "b"],
+    )
+    bags = []
+    for identifier, row, column in (("near", 4, 1), ("far", 4, 6)):
+        x_coordinate, y_coordinate = rasterio.transform.xy(
+            source.transform, row, column, offset="center"
+        )
+        bags.append(
+            Bag(
+                jnp.ones((1, 2)),
+                0,
+                identifier,
+                coordinates=jnp.asarray([[x_coordinate, y_coordinate]]),
+                metadata={"anchor_cell": [row, column], "window_size": 1},
+            )
+        )
+    dataset = BagDataset(bags, ["a", "b"], crs=source.crs)
+    audit = _annotate_mask_boundary_distances(source, [dataset])
+    distances = {
+        bag.id: (bag.metadata or {})["distance_to_mask_boundary"] for bag in dataset.collections
+    }
+    assert distances["far"] > distances["near"]
+    assert audit["n_annotated_bags"] == 2

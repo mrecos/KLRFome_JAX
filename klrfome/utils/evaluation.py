@@ -3,6 +3,8 @@
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 import numpy as np
+from scipy.sparse import csr_matrix
+from scipy.spatial import cKDTree
 from scipy.stats import spearmanr, t
 from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -33,11 +35,14 @@ def availability_capture_metrics(
     availability_scores: np.ndarray,
     area_fractions: Sequence[float] = (0.05, 0.10, 0.20),
 ) -> list[Dict[str, Optional[float]]]:
-    """Report held-out site capture, gain, and lift at mapped-area budgets.
+    """Report held-out site capture and area-efficiency at mapped-area budgets.
 
     Thresholds are defined only by the availability distribution.  ``capture``
     is the fraction of held-out sites above the threshold, ``lift`` is capture
-    divided by mapped area, and ``gain`` is Kvamme's gain ``1-area/capture``.
+    divided by mapped area, and ``capture_surplus`` is capture minus mapped
+    area (the vertical distance above random allocation). ``gain`` retains
+    Kvamme's gain ``1-area/capture`` for archaeological comparison; it is a
+    monotone transform of lift and is therefore not independent evidence.
     """
     sites = _validated_finite_vector(site_scores, "site_scores")
     availability = _validated_finite_vector(availability_scores, "availability_scores")
@@ -58,10 +63,152 @@ def availability_capture_metrics(
                 "threshold": threshold,
                 "capture": capture,
                 "lift": capture / achieved_area,
+                "capture_surplus": capture - achieved_area,
                 "gain": 1.0 - achieved_area / capture if capture > 0 else None,
             }
         )
     return rows
+
+
+def spatial_autocorrelation_diagnostics(
+    values: np.ndarray,
+    coordinates: np.ndarray,
+    identifiers: Optional[Sequence[str]] = None,
+    n_neighbors: int = 8,
+    permutations: int = 999,
+    seed: int = 42,
+    alpha: float = 0.05,
+) -> Dict[str, Any]:
+    """Compute exploratory global and local Moran diagnostics on a kNN graph.
+
+    The graph is the symmetric union of directed k-nearest-neighbor links and
+    is row standardized. Permutation p-values use unconditional randomization;
+    local values are adjusted with Benjamini-Hochberg before cluster flags are
+    reported. These diagnostics describe residual or disagreement structure;
+    they are not predictive-performance scores.
+    """
+    array = _validated_finite_vector(values, "values")
+    points = np.asarray(coordinates, dtype=float)
+    if points.shape != (len(array), 2) or not np.isfinite(points).all():
+        raise ValueError("coordinates must be a finite array with shape (n, 2)")
+    if len(array) < 3:
+        raise ValueError("spatial diagnostics require at least three observations")
+    if not 1 <= n_neighbors < len(array):
+        raise ValueError("n_neighbors must be in [1, n_observations)")
+    if permutations < 0:
+        raise ValueError("permutations must be nonnegative")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    ids = (
+        list(identifiers)
+        if identifiers is not None
+        else [str(index) for index in range(len(array))]
+    )
+    if len(ids) != len(array) or len(set(ids)) != len(ids):
+        raise ValueError("identifiers must be unique and aligned with values")
+
+    centered = array - float(np.mean(array))
+    variance = float(np.mean(centered**2))
+    if variance <= np.finfo(float).eps:
+        return {
+            "n_observations": len(array),
+            "n_neighbors": n_neighbors,
+            "permutations": permutations,
+            "global_moran_i": None,
+            "global_p_value": None,
+            "local": [],
+            "note": "undefined because values are constant",
+        }
+
+    tree = cKDTree(points)
+    directed = np.asarray(tree.query(points, k=n_neighbors + 1)[1][:, 1:], dtype=int)
+    rows: np.ndarray = np.repeat(np.arange(len(array)), n_neighbors)
+    adjacency = csr_matrix(
+        (np.ones(len(rows), dtype=float), (rows, directed.reshape(-1))),
+        shape=(len(array), len(array)),
+    )
+    adjacency = adjacency.maximum(adjacency.T)
+    adjacency.setdiag(0)
+    adjacency.eliminate_zeros()
+    row_sums = np.asarray(adjacency.sum(axis=1)).reshape(-1)
+    if np.any(row_sums == 0):
+        raise RuntimeError("kNN symmetrization produced an observation without neighbors")
+    weights = adjacency.multiply((1.0 / row_sums)[:, None]).tocsr()
+    lag = weights @ centered
+    global_i = float(np.sum(centered * lag) / np.sum(centered**2))
+    local_i = centered * lag / variance
+
+    global_p: Optional[float] = None
+    local_raw: np.ndarray = np.ones(len(array), dtype=float)
+    if permutations:
+        rng = np.random.default_rng(seed)
+        simulated_global: np.ndarray = np.empty(permutations, dtype=float)
+        simulated_local: np.ndarray = np.empty((permutations, len(array)), dtype=float)
+        for index in range(permutations):
+            permuted = rng.permutation(centered)
+            permuted_lag = weights @ permuted
+            simulated_global[index] = np.sum(permuted * permuted_lag) / np.sum(permuted**2)
+            simulated_local[index] = permuted * permuted_lag / variance
+        expected_global = -1.0 / (len(array) - 1)
+        global_p = float(
+            (
+                1
+                + np.sum(
+                    np.abs(simulated_global - expected_global) >= abs(global_i - expected_global)
+                )
+            )
+            / (permutations + 1)
+        )
+        local_raw = (1 + np.sum(np.abs(simulated_local) >= np.abs(local_i)[None, :], axis=0)) / (
+            permutations + 1
+        )
+    local_fdr = _benjamini_hochberg(local_raw)
+
+    local_rows = []
+    for index, identifier in enumerate(ids):
+        if centered[index] >= 0 and lag[index] >= 0:
+            cluster = "high-high"
+        elif centered[index] < 0 and lag[index] < 0:
+            cluster = "low-low"
+        elif centered[index] >= 0:
+            cluster = "high-low"
+        else:
+            cluster = "low-high"
+        local_rows.append(
+            {
+                "id": identifier,
+                "x": float(points[index, 0]),
+                "y": float(points[index, 1]),
+                "value": float(array[index]),
+                "spatial_lag": float(lag[index]),
+                "local_moran_i": float(local_i[index]),
+                "cluster": cluster,
+                "p_value": float(local_raw[index]) if permutations else None,
+                "p_value_fdr": float(local_fdr[index]) if permutations else None,
+                "significant_fdr": bool(local_fdr[index] <= alpha) if permutations else False,
+            }
+        )
+    return {
+        "n_observations": len(array),
+        "n_neighbors": n_neighbors,
+        "permutations": permutations,
+        "global_moran_i": global_i,
+        "global_p_value": global_p,
+        "local": local_rows,
+        "note": "exploratory kNN Moran diagnostics; not a performance metric",
+    }
+
+
+def _benjamini_hochberg(p_values: np.ndarray) -> np.ndarray:
+    """Return monotone Benjamini-Hochberg adjusted p-values."""
+    values = np.asarray(p_values, dtype=float)
+    order = np.argsort(values)
+    ranked = values[order]
+    adjusted = ranked * len(values) / np.arange(1, len(values) + 1)
+    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
+    output = np.empty_like(adjusted)
+    output[order] = np.clip(adjusted, 0.0, 1.0)
+    return output
 
 
 def continuous_boyce_from_availability(

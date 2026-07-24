@@ -42,7 +42,10 @@ python benchmarks/run_section6_evaluation.py --mode prepare
 # Primary M0–M3, LR, RF, and geometry-control evaluation.
 python benchmarks/run_section6_evaluation.py --mode primary
 
-# Add 9 × 9, 11 × 11, and original-irregular support sensitivities.
+# Add all-49-cell and exactly matched valid-cell-count controls (current default).
+python benchmarks/run_section6_evaluation.py --mode geometry
+
+# After the geometry gate is understood, add 9 × 9, 11 × 11, and original-irregular sensitivities.
 python benchmarks/run_section6_evaluation.py --mode full
 ```
 
@@ -51,9 +54,12 @@ The tracked configuration and result contract are `section6_evaluation_config.js
 `build_section6_evaluation_notebook.py` regenerates the streamlined reporting notebook.
 Install its kernel and builder dependencies with `pip install -e ".[notebooks]"`.
 
-The primary metrics are mapped-area capture/lift/gain, Continuous Boyce, and held-out site
-availability percentiles. ROC AUC and PR AUC remain secondary because background is available
-environment rather than confirmed absence.
+The primary metrics are mapped-area capture, lift, capture surplus, Continuous Boyce, and held-out
+site availability percentiles. Kvamme Gain is retained as a secondary archaeological crosswalk but
+is a monotone transform of lift. ROC AUC and PR AUC remain secondary because background is
+available environment rather than confirmed absence. Exploratory Moran/LISA diagnostics target
+held-out site shortfall and spatially coherent model disagreement rather than treating expected
+clustering in the raw focal prediction surface as evidence of accuracy.
 
 ## Quick Validation (Recommended)
 

@@ -178,14 +178,18 @@ the same immutable fold plan.
 
 Useful presence-background diagnostics include:
 
-- mapped-area capture, lift, and gain as the primary operating-point evidence;
+- mapped-area capture, lift, and capture surplus as the primary operating-point evidence;
 - continuous Boyce index and held-out site availability percentiles;
+- Kvamme Gain as a secondary archaeological crosswalk that is redundant with lift;
 - ROC AUC as a secondary ranking summary;
 - PR AUC, interpreted relative to the constructed background prevalence; and
 - direct inspection of mapped predictions.
 
 Mapped predictions are especially important because spatial artifacts and support mismatches can
 be difficult to identify from aggregate metrics alone.
+The Section 6 workflow also uses geometry-controlled sensitivities plus exploratory Moran/LISA
+diagnostics of held-out site failures and model disagreement; spatial clustering of the raw focal
+prediction surface is not treated as evidence of accuracy.
 
 ## Project status
 

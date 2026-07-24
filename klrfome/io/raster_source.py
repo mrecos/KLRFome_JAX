@@ -111,7 +111,17 @@ class RasterSource:
                 )
 
     def valid_mask(self, window: Optional[Window] = None) -> np.ndarray:
-        return self.read_window(window)[1]
+        """Return the all-band validity intersection without stacking raster values."""
+        valid = None
+        for path in self.paths:
+            with rasterio.open(path) as source:
+                band = source.read(1, window=window, masked=True)
+            data = np.asarray(band.data)
+            band_valid = ~np.ma.getmaskarray(band) & np.isfinite(data)
+            valid = band_valid if valid is None else valid & band_valid
+        assert valid is not None
+        self.read_log.append(window)
+        return valid
 
     def sample_points(self, coordinates: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Sample all bands at x/y pairs and return values, validity, and cell indices."""

@@ -7,6 +7,7 @@ from klrfome.utils.evaluation import (
     availability_capture_metrics,
     availability_percentile_ranks,
     continuous_boyce_from_availability,
+    spatial_autocorrelation_diagnostics,
 )
 
 
@@ -25,6 +26,10 @@ def test_capture_metrics_use_mapped_area_not_sampled_class_prevalence():
     rows = availability_capture_metrics(sites, availability, (0.05, 0.10, 0.20))
     assert [row["capture"] for row in rows] == [0.75, 1.0, 1.0]
     assert rows[0]["lift"] == pytest.approx(rows[0]["capture"] / rows[0]["achieved_area_fraction"])
+    assert rows[0]["capture_surplus"] == pytest.approx(
+        rows[0]["capture"] - rows[0]["achieved_area_fraction"]
+    )
+    assert rows[0]["gain"] == pytest.approx(1.0 - 1.0 / rows[0]["lift"])
     assert rows[1]["gain"] == pytest.approx(
         1.0 - rows[1]["achieved_area_fraction"] / rows[1]["capture"]
     )
@@ -63,3 +68,31 @@ def test_availability_metrics_validate_area_fractions(bad_fraction):
             np.asarray([0.1, 0.9]),
             (bad_fraction,),
         )
+
+
+def test_spatial_autocorrelation_detects_clustered_values_deterministically():
+    coordinates = np.column_stack([np.arange(12, dtype=float), np.zeros(12)])
+    values = np.asarray([0.0] * 6 + [1.0] * 6)
+    first = spatial_autocorrelation_diagnostics(
+        values, coordinates, n_neighbors=2, permutations=99, seed=4
+    )
+    second = spatial_autocorrelation_diagnostics(
+        values, coordinates, n_neighbors=2, permutations=99, seed=4
+    )
+    assert first == second
+    assert first["global_moran_i"] > 0.5
+    assert len(first["local"]) == len(values)
+    assert {row["cluster"] for row in first["local"]} <= {
+        "high-high",
+        "low-low",
+        "high-low",
+        "low-high",
+    }
+
+
+def test_spatial_autocorrelation_reports_constant_values_as_undefined():
+    diagnostic = spatial_autocorrelation_diagnostics(
+        np.ones(5), np.column_stack([np.arange(5), np.zeros(5)]), n_neighbors=2
+    )
+    assert diagnostic["global_moran_i"] is None
+    assert diagnostic["local"] == []

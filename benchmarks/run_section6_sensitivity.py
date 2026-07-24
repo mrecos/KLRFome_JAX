@@ -168,7 +168,15 @@ def _extract_focal_bag(
         stratum_id=stratum_id,
     )
     metadata = dict(bag.metadata or {})
-    metadata.update({"sensitivity_design": "common_focal_support", "window_size": window_size})
+    anchor_row, anchor_col = rowcol(source.transform, x_coordinate, y_coordinate)
+    metadata.update(
+        {
+            "sensitivity_design": "common_focal_support",
+            "window_size": window_size,
+            "anchor_cell": [int(anchor_row), int(anchor_col)],
+            "anchor_xy": [float(x_coordinate), float(y_coordinate)],
+        }
+    )
     bag.metadata = metadata
     return bag
 
